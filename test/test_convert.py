@@ -79,6 +79,16 @@ class ConvertDateTests(unittest.TestCase):
         # x converti en chaînes ISO (plus des datenums flottants)
         self.assertIsInstance(spec["data"][0]["x"][0], str)
 
+    def test_bar_on_date_axis_width_in_ms(self):
+        fig, ax = plt.subplots()
+        days = [_dt.date(2024, 1, 1), _dt.date(2024, 1, 2), _dt.date(2024, 1, 3)]
+        ax.bar(days, [1, 2, 3])
+        spec = convert_figure(fig)
+        self.assertEqual(spec["layout"]["xaxis"]["type"], "date")
+        bar = [t for t in spec["data"] if t["type"] == "bar"][0]
+        # largeur convertie en millisecondes (jours * 86.4M) -> >> 1
+        self.assertTrue(all(w > 1e6 for w in bar["width"]))
+
 
 class ConvertLegendTests(unittest.TestCase):
     def tearDown(self):
@@ -116,6 +126,16 @@ class ConvertTwinxTests(unittest.TestCase):
         # les traces du twin pointent vers x principal et y2
         y2_traces = [t for t in spec["data"] if t.get("yaxis") == "y2"]
         self.assertTrue(y2_traces and all(t["xaxis"] == "x" for t in y2_traces))
+
+    def test_twinx_secondary_legend_kept(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1], [0, 1], label="A")
+        ax2 = ax.twinx()
+        ax2.plot([0, 1], [2, 3], label="B")
+        ax2.legend(loc="upper left")  # legende posee sur l'axe twin
+        spec = convert_figure(fig)
+        self.assertTrue(spec["layout"]["showlegend"])
+        self.assertIn("legend", spec["layout"])
 
 
 if __name__ == "__main__":

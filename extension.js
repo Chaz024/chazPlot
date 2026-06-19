@@ -27,9 +27,16 @@ const pendingExports = {};
 function activate(context) {
   extContext = context;
   storage.init(context);
-  figures = storage.loadAll();
+  // nextId est connu immediatement (index synchrone) ; les figures sont
+  // chargees en asynchrone pour ne pas bloquer le demarrage.
   nextId = storage.nextId();
-  figures.forEach(function (f) { if (f.id >= nextId) { nextId = f.id + 1; } });
+  storage.loadAll().then(function (loaded) {
+    // fusionne les figures persistees AVANT celles eventuellement recues
+    // pendant le chargement (qui ont des id >= nextId, donc pas de collision).
+    figures = loaded.concat(figures);
+    figures.forEach(function (f) { if (f.id >= nextId) { nextId = f.id + 1; } });
+    postToWebview({ type: "reset", figs: figures });
+  });
   const cfg = vscode.workspace.getConfiguration("spyderPlots");
   startServer(cfg.get("port", 53210), 0);
 

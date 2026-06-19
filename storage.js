@@ -50,19 +50,19 @@ function nextId() {
   return readIndex().nextId;
 }
 
+// Chargement asynchrone et parallele : ne bloque pas le thread de
+// l'extension au demarrage, meme avec beaucoup de figures lourdes
+// (animations). Retourne une Promise<fig[]> dans l'ordre de l'index.
 function loadAll() {
-  if (!figuresDir) { return []; }
+  if (!figuresDir) { return Promise.resolve([]); }
   const index = readIndex();
-  const out = [];
-  index.figures.forEach(function (entry) {
-    try {
-      const raw = fs.readFileSync(figPath(entry.id), "utf8");
-      out.push(JSON.parse(raw));
-    } catch (e) {
-      // fichier manquant/corrompu : on ignore cette figure
-    }
+  return Promise.all(index.figures.map(function (entry) {
+    return fs.promises.readFile(figPath(entry.id), "utf8")
+      .then(function (raw) { return JSON.parse(raw); })
+      .catch(function () { return null; });  // fichier manquant/corrompu
+  })).then(function (figs) {
+    return figs.filter(function (f) { return f !== null; });
   });
-  return out;
 }
 
 // Suppression de fichier best-effort, non bloquante.

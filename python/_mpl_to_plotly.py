@@ -26,6 +26,7 @@ from matplotlib.container import BarContainer
 from matplotlib.patches import Rectangle
 
 _MAX_POINTS = 500000  # au-dela : figure trop lourde pour le JSON -> fallback
+_MS_PER_DAY = 86400000.0  # largeur de barre sur axe date : jours -> millisecondes
 
 _LINESTYLES = {
     "-": "solid",
@@ -481,6 +482,31 @@ def _classify_axes(axes_list):
     return infos
 
 
+def _apply_legend(layout, ax):
+    """Active et positionne la legende si l'axe en porte une. S'applique
+    aussi bien a l'axe hote qu'a un axe twin (qui peut porter la legende)."""
+    legend = ax.get_legend()
+    if legend is None:
+        return
+    layout["showlegend"] = True
+    # Legende lisible : cadre, fond semi-transparent, police plus grande.
+    legend_layout = {
+        "font": {"size": 13},
+        "bgcolor": "rgba(255,255,255,0.88)",
+        "bordercolor": "rgba(80,80,80,0.55)",
+        "borderwidth": 1,
+        "xanchor": "right",
+        "x": 0.99,
+        "yanchor": "top",
+        "y": 0.99,
+    }
+    # position selon loc matplotlib (best/0 -> defaut haut-droite)
+    pos = _LEGEND_LOC.get(getattr(legend, "_loc", 0))
+    if pos:
+        legend_layout.update(pos)
+    layout["legend"] = legend_layout
+
+
 # ------------------------------------------------------------
 # Point d'entree
 # ------------------------------------------------------------
@@ -569,6 +595,15 @@ def convert_figure(fig):
                 trace["x"] = _dates_to_iso(trace["x"])
             if y_is_date and "y" in trace:
                 trace["y"] = _dates_to_iso(trace["y"])
+            # Sur un axe date, Plotly attend la largeur des barres en
+            # millisecondes (matplotlib la donne en jours).
+            if trace.get("type") == "bar" and "width" in trace:
+                horiz = trace.get("orientation") == "h"
+                if (horiz and y_is_date) or (not horiz and x_is_date):
+                    trace["width"] = [w * _MS_PER_DAY for w in trace["width"]]
+
+        # legende (valable pour l'axe hote comme pour un axe twin)
+        _apply_legend(layout, ax)
 
         # ---- twinx : l'axe secondaire reutilise le X de l'hote ----
         if is_twin:
@@ -674,26 +709,6 @@ def convert_figure(fig):
                 "showarrow": False,
                 "font": {"size": 14},
             })
-
-        legend = ax.get_legend()
-        if legend is not None:
-            layout["showlegend"] = True
-            # Legende lisible : cadre, fond semi-transparent, police plus grande.
-            legend_layout = {
-                "font": {"size": 13},
-                "bgcolor": "rgba(255,255,255,0.88)",
-                "bordercolor": "rgba(80,80,80,0.55)",
-                "borderwidth": 1,
-                "xanchor": "right",
-                "x": 0.99,
-                "yanchor": "top",
-                "y": 0.99,
-            }
-            # position selon loc matplotlib (best/0 -> defaut haut-droite)
-            pos = _LEGEND_LOC.get(getattr(legend, "_loc", 0))
-            if pos:
-                legend_layout.update(pos)
-            layout["legend"] = legend_layout
 
     # filet de securite : aucune trace produite (artiste exotique passe
     # entre les mailles) -> on retombe sur le SVG plutot qu'un graphe vide.
