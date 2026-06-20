@@ -312,11 +312,7 @@ Créer `media/inset_layout.js` :
     makeInsetCandidates: makeInsetCandidates,
     scoreInsetCandidate: scoreInsetCandidate,
     chooseInsetDomain: chooseInsetDomain,
-    clampPlacement: clampPlacement,
-    // exposes pour tests/usages eventuels
-    rectArea: rectArea,
-    rectOverlapArea: rectOverlapArea,
-    valueToPaper: valueToPaper
+    clampPlacement: clampPlacement
   };
 });
 ```
