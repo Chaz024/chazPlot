@@ -886,14 +886,47 @@
     return out;
   }
 
-  function applyZoomInset(el, selection){
+  // Drag/resize de la bordure d'inset : lit les nouvelles bornes paper du
+  // shape editable, borne le placement, et reconstruit l'inset. Renvoie true
+  // si l'update concernait bien la bordure.
+  function handleInsetDrag(el, update){
+    const bi = el._spInsetBorderIndex;
+    if (bi == null){ return false; }
+    const cur = (el.layout && Array.isArray(el.layout.shapes) && el.layout.shapes[bi]) || {};
+    const rect = {};
+    let touched = false;
+    ["x0", "x1", "y0", "y1"].forEach(function(k){
+      const key = "shapes[" + bi + "]." + k;
+      if (update[key] !== undefined){ rect[k] = Number(update[key]); touched = true; }
+      else { rect[k] = Number(cur[k]); }
+    });
+    if (!touched){ return false; }
+    // le drag peut inverser les bornes
+    const nrect = {
+      x0: Math.min(rect.x0, rect.x1), x1: Math.max(rect.x0, rect.x1),
+      y0: Math.min(rect.y0, rect.y1), y1: Math.max(rect.y0, rect.y1)
+    };
+    const sel = el._spInsetSelection;
+    if (!sel){ return false; }
+    const baseLayout = el._spBaseLayout || {};
+    const xAxis = baseLayout[sel.xaxisKey] || {};
+    const yAxis = baseLayout[sel.yaxisKey] || {};
+    const xDomain = Array.isArray(xAxis.domain) ? xAxis.domain : [0.08, 0.96];
+    const yDomain = Array.isArray(yAxis.domain) ? yAxis.domain : [0.12, 0.94];
+    const placement = InsetLayout.clampPlacement(nrect, xDomain, yDomain, 0.12);
+    applyZoomInset(el, sel, placement);
+    return true;
+  }
+
+  function applyZoomInset(el, selection, placementOverride){
     if (!el || !selection || typeof Plotly === "undefined"){ return; }
     const baseData = clone(el._spBaseData || []);
     const baseLayout = baseLayoutForPlot(el);
     const additions = insetTraces(baseData, selection, "x", "y");
     if (additions.length === 0){ return; }
 
-    const placement = chooseInsetDomain(baseData, baseLayout, selection);
+    const placement = placementOverride || chooseInsetDomain(baseData, baseLayout, selection);
+    el._spInsetSelection = selection;
     const axisIndex = nextAxisIndex(baseLayout);
     const insetXKey = "xaxis" + axisIndex;
     const insetYKey = "yaxis" + axisIndex;
@@ -910,15 +943,18 @@
       x0: selection.xRange[0], x1: selection.xRange[1],
       y0: selection.yRange[0], y1: selection.yRange[1],
       fillcolor: "rgba(55,148,255,0.08)",
-      line: { color: "rgba(55,148,255,0.95)", width: 2, dash: "dash" }
+      line: { color: "rgba(55,148,255,0.95)", width: 2, dash: "dash" },
+      editable: false
     });
     shapes.push({
       type: "rect", xref: "paper", yref: "paper",
       x0: placement.xDomain[0], x1: placement.xDomain[1],
       y0: placement.yDomain[0], y1: placement.yDomain[1],
       fillcolor: "rgba(255,255,255,0)",
-      line: { color: "rgba(55,148,255,0.95)", width: 2 }
+      line: { color: "rgba(55,148,255,0.95)", width: 2 },
+      editable: true
     });
+    el._spInsetBorderIndex = shapes.length - 1;
     baseLayout.shapes = shapes;
     const annotations = insetAnnotations(baseLayout, selection, placement, insetXRef, insetYRef);
     if (annotations.length){
@@ -929,7 +965,11 @@
 
     el._spHasInset = true;
     markZoomInsetButton(el);
-    Plotly.react(el, baseData.concat(additions), baseLayout, el._spConfig || plotlyConfig(el._spFig || {}));
+    const baseConfig = el._spConfig || plotlyConfig(el._spFig || {});
+    const insetConfig = Object.assign({}, baseConfig, {
+      edits: Object.assign({}, baseConfig.edits, { shapePosition: true })
+    });
+    Plotly.react(el, baseData.concat(additions), baseLayout, insetConfig);
   }
 
   function clearZoomInset(el){
@@ -937,6 +977,8 @@
     if (el._spInsetActive){ cancelZoomInset(el); }
     if (!el._spHasInset){ return; }
     el._spHasInset = false;
+    el._spInsetSelection = null;
+    el._spInsetBorderIndex = null;
     markZoomInsetButton(el);
     Plotly.react(el, clone(el._spBaseData || []), baseLayoutForPlot(el), el._spConfig || plotlyConfig(el._spFig || {}));
   }
@@ -1038,6 +1080,12 @@
     Plotly.newPlot(el, data, layout, config);
     if (el.on){
       el.on("plotly_relayout", function(update){
+        // 1. Drag/resize d'un inset existant (bordure editable)
+        if (!el._spInsetActive && el._spHasInset){
+          handleInsetDrag(el, update);
+          return;
+        }
+        // 2. Capture de la zone a zoomer (inset arme)
         if (!el._spInsetActive){ return; }
         const selection = parseZoomInsetSelection(update);
         if (!selection){ return; }
