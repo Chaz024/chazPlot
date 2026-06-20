@@ -914,6 +914,17 @@
     const xDomain = Array.isArray(xAxis.domain) ? xAxis.domain : [0.08, 0.96];
     const yDomain = Array.isArray(yAxis.domain) ? yAxis.domain : [0.12, 0.94];
     const placement = InsetLayout.clampPlacement(nrect, xDomain, yDomain, 0.12);
+    // Idempotence : si le placement borne est inchange (ex. relayout reemis par
+    // Plotly.react avec les memes coordonnees), ne rien reconstruire -> casse
+    // toute cascade re-entrante depuis le listener relayout.
+    const prev = el._spInsetPlacement;
+    if (prev &&
+        Math.abs(prev.xDomain[0] - placement.xDomain[0]) < 1e-6 &&
+        Math.abs(prev.xDomain[1] - placement.xDomain[1]) < 1e-6 &&
+        Math.abs(prev.yDomain[0] - placement.yDomain[0]) < 1e-6 &&
+        Math.abs(prev.yDomain[1] - placement.yDomain[1]) < 1e-6){
+      return false;
+    }
     applyZoomInset(el, sel, placement);
     return true;
   }
@@ -927,6 +938,7 @@
 
     const placement = placementOverride || chooseInsetDomain(baseData, baseLayout, selection);
     el._spInsetSelection = selection;
+    el._spInsetPlacement = placement;
     const axisIndex = nextAxisIndex(baseLayout);
     const insetXKey = "xaxis" + axisIndex;
     const insetYKey = "yaxis" + axisIndex;
@@ -979,6 +991,7 @@
     el._spHasInset = false;
     el._spInsetSelection = null;
     el._spInsetBorderIndex = null;
+    el._spInsetPlacement = null;
     markZoomInsetButton(el);
     Plotly.react(el, clone(el._spBaseData || []), baseLayoutForPlot(el), el._spConfig || plotlyConfig(el._spFig || {}));
   }
