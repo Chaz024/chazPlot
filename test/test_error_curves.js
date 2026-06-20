@@ -100,4 +100,24 @@ check("buildErrorSeries: NaN cible propage en null", function () {
   assert.strictEqual(s.y[0], null);
 });
 
+// --- isInterpolableX (exclusion des lignes de reference type axvline) ---
+check("isInterpolableX: x constant (axvline) -> false", function () {
+  assert.strictEqual(EM.isInterpolableX([1, 1]), false);
+});
+check("isInterpolableX: x varies -> true", function () {
+  assert.strictEqual(EM.isInterpolableX([0, 1, 2]), true);
+});
+check("isInterpolableX: un seul point -> false", function () {
+  assert.strictEqual(EM.isInterpolableX([5]), false);
+});
+check("isInterpolableX: vide -> false", function () {
+  assert.strictEqual(EM.isInterpolableX([]), false);
+});
+check("isInterpolableX: que des NaN -> false", function () {
+  assert.strictEqual(EM.isInterpolableX([NaN, NaN]), false);
+});
+check("isInterpolableX: au moins 2 valeurs distinctes -> true", function () {
+  assert.strictEqual(EM.isInterpolableX([1, 1, 2]), true);
+});
+
 console.log("\n" + passed + " tests passes");

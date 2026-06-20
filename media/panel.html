@@ -844,6 +844,10 @@
       (fig.plotly && fig.plotly.data ? fig.plotly.data : []).forEach(function(trace){
         const type = trace.type || "scatter";
         if (type !== "scatter"){ return; } // barres exclues du calcul
+        const x = numericX(trace.x || []);
+        // Ecarte les lignes de reference (axvline : x constant) : ce sont des
+        // Line2D mais pas des courbes y = f(x), donc hors sujet pour l'erreur.
+        if (!ErrorMath.isInterpolableX(x)){ return; }
         const color = (trace.line && trace.line.color) ||
                       (trace.marker && trace.marker.color) || null;
         curves.push({
@@ -851,7 +855,7 @@
           letter: compareLabel(idx),
           name: trace.name || ("courbe " + (idx + 1)),
           color: color,
-          x: numericX(trace.x || []),
+          x: x,
           y: (trace.y || []).map(Number)
         });
         idx++;
@@ -989,13 +993,16 @@
     const curves = flattenCurves(figs);
     const ref = curves.filter(function(c){ return c.key === refKey; })[0] || curves[0];
 
-    // Panneau du haut (superposition) reduit ; panneau du bas (erreurs).
-    layout.yaxis = Object.assign({}, layout.yaxis, { domain: [0.32, 1] });
+    // Vrai sous-graphe empile : x partage, repartition 60 / 40 avec un
+    // ecart franc entre les deux panneaux. L'axe X est ancre sous le
+    // panneau d'erreur (ticks en bas), le panneau du haut le partage.
+    layout.yaxis = Object.assign({}, layout.yaxis, { domain: [0.43, 1.0] });
     layout.yaxis2 = {
-      domain: [0, 0.26], anchor: "x",
+      domain: [0, 0.38], anchor: "x",
       title: { text: allRelPct(typeIds) ? "erreur (%)" : "erreur" },
-      zeroline: true
+      zeroline: true, showgrid: true
     };
+    layout.xaxis = Object.assign({}, layout.xaxis, { anchor: "y2" });
     layout.shapes = [{
       type: "line", xref: "paper", x0: 0, x1: 1,
       yref: "y2", y0: 0, y1: 0,

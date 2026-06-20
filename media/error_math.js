@@ -36,6 +36,21 @@
     return out;
   }
 
+  // Une serie n'est exploitable comme courbe y = f(x) que si x prend au
+  // moins 2 valeurs finies distinctes. Ecarte les lignes de reference type
+  // axvline (x constant) qui sont des Line2D mais pas des courbes.
+  function isInterpolableX(xs) {
+    if (!xs || xs.length < 2) { return false; }
+    let first = null, hasFirst = false;
+    for (let i = 0; i < xs.length; i++) {
+      const v = xs[i];
+      if (v == null || isNaN(v)) { continue; }
+      if (!hasFirst) { first = v; hasFirst = true; }
+      else if (v !== first) { return true; }
+    }
+    return false;
+  }
+
   const EPS = 1e-12;
 
   const ERROR_TYPES = {
@@ -78,6 +93,7 @@
     computeError: computeError,
     ERROR_TYPES: ERROR_TYPES,
     EPS: EPS,
-    buildErrorSeries: buildErrorSeries
+    buildErrorSeries: buildErrorSeries,
+    isInterpolableX: isInterpolableX
   };
 });
