@@ -119,6 +119,7 @@
   body.no-fit .imgwrap img.vector{ width:auto; }
   body.no-fit .imgwrap{ overflow-x:auto; }
   .plotwrap{ padding:4px; background: var(--sp-plot-bg); }
+  .sp-inset-armed{ outline:2px dashed rgba(55,148,255,.85); outline-offset:-2px; }
 
   /* ----- Lecteur d'animation ----- */
   .player{ background: var(--sp-plot-bg); }
@@ -1087,6 +1088,12 @@
     return s;
   }
   const listPlots = [];   // { el, fig } pour le recalcul de hauteur au resize
+  // Retour visuel du mode encart arme : contour sur le graphe (marche meme en
+  // comparaison ou il n'y a pas de zone de coordonnees) + texte si dispo.
+  function setInsetArmedFeedback(el, coordsEl){
+    if (el.parentElement){ el.parentElement.classList.toggle("sp-inset-armed", !!el._spInsetArmed); }
+    if (coordsEl){ coordsEl.textContent = el._spInsetArmed ? "Mode encart : trace une zone a agrandir" : ""; }
+  }
   function renderPlotly(el, fig, fill, coordsEl){
     if (!fig.plotly || !el || typeof Plotly === "undefined"){ return; }
     const layout = JSON.parse(JSON.stringify(fig.plotly.layout || {}));
@@ -1122,7 +1129,7 @@
       }
       if (!onZoomBtn){ return; }
       el._spInsetArmed = (ev.ctrlKey || ev.metaKey) ? !el._spInsetArmed : false;
-      if (coordsEl){ coordsEl.textContent = el._spInsetArmed ? "Mode encart : trace une zone a agrandir" : ""; }
+      setInsetArmedFeedback(el, coordsEl);
     }, true);
     if (el.on){
       el.on("plotly_relayout", function(update){
@@ -1132,7 +1139,7 @@
         const selection = parseZoomInsetSelection(update);
         if (!selection){ return; }
         el._spInsetArmed = false;
-        if (coordsEl){ coordsEl.textContent = ""; }
+        setInsetArmedFeedback(el, coordsEl);
         applyZoomInset(el, selection);
       });
     }
@@ -1592,6 +1599,7 @@
     if (typeof Plotly === "undefined" || !Plotly.Plots){ return; }
     compareBody.querySelectorAll(".compare-plot").forEach(function(el){
       try { Plotly.Plots.resize(el); } catch (e) {}
+      if (el._spHasInset){ requestAnimationFrame(function(){ positionInsetOverlay(el); }); }
     });
   }
 
