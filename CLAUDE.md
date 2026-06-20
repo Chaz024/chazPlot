@@ -145,6 +145,13 @@ webview, `require` under Node), tested by `test/test_error_curves.js`. The
 Plotly glue (flattening traces, stacked residual subplot with 2 Y axes) remains
 in `panel.html`.
 
+Le placement du zoom-inset (« agrandir une zone » en mode overlay) — génération
+des candidats, scoring (évite données/annotations, préfère un coin vide) et
+bornage du drag — vit dans `media/inset_layout.js` (module pur UMD :
+`self.InsetLayout` dans le webview, `require` sous Node), testé par
+`test/test_inset_layout.js`. La glue Plotly (bordure éditable, écoute
+`plotly_relayout` pour déplacer/redimensionner l'encart) reste dans `panel.html`.
+
 ### State & persistence
 
 Figures live in-memory in `extension.js` (`figures[]`, `nextId`) **and are
