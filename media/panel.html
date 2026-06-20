@@ -1110,27 +1110,24 @@
       listPlots.push({ el: el, fig: fig });
     }
     const config = plotlyConfig(fig);
+    // Bouton dedie dans la modebar Plotly : un clic (des)arme le mode encart
+    // (contour pointille) ; tracer ensuite une zone cree l'encart. Robuste
+    // (API Plotly officielle) et disponible aussi en mode comparaison.
+    config.modeBarButtonsToAdd = [{
+      name: "zoomInset",
+      title: "Zoom encart : cliquer pour armer, puis tracer une zone (re-clic = desarmer)",
+      icon: { width: 16, height: 16, path: "M6.4 2.2a4.2 4.2 0 1 0 2.5 7.6l3.2 3.2 1-1-3.2-3.2A4.2 4.2 0 0 0 6.4 2.2zm0 1.4a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zM5.1 5h2.6v2.6H5.1z" },
+      click: function(gd){
+        gd._spInsetArmed = !gd._spInsetArmed;
+        setInsetArmedFeedback(gd, coordsEl);
+      }
+    }];
     el._spFig = fig;
     el._spBaseData = clone(data);
     el._spBaseLayout = clone(layout);
     el._spConfig = config;
     el._spHasInset = false;
     Plotly.newPlot(el, data, layout, config);
-    // Ctrl/Cmd+clic sur la loupe de la modebar = (des)arme le mode encart : le
-    // prochain trace de zoom devient un encart. Clic normal = zoom standard.
-    el.addEventListener("click", function(ev){
-      let node = ev.target, onZoomBtn = false;
-      while (node && node !== el){
-        if (node.classList && node.classList.contains("modebar-btn")){
-          onZoomBtn = node.getAttribute("data-val") === "zoom";
-          break;
-        }
-        node = node.parentNode;
-      }
-      if (!onZoomBtn){ return; }
-      el._spInsetArmed = (ev.ctrlKey || ev.metaKey) ? !el._spInsetArmed : false;
-      setInsetArmedFeedback(el, coordsEl);
-    }, true);
     if (el.on){
       el.on("plotly_relayout", function(update){
         // Mode encart arme par Ctrl+clic sur la loupe : le trace de zoom
