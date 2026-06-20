@@ -277,6 +277,7 @@
       </label>
       <button id="compareClose">Fermer x</button>
       <button id="errorToggle" class="compact" disabled title="Disponible uniquement en superposition interactive (Plotly) avec au moins 2 courbes">Erreur</button>
+      <span class="error-warn" id="errorWarn"></span>
     </div>
     <div class="error-panel" id="errorPanel" style="display:none">
       <label>Reference :
@@ -290,7 +291,6 @@
       </span>
       <button id="errorApply" class="compact">Appliquer</button>
       <button id="errorHide" class="compact">Masquer</button>
-      <span class="error-warn" id="errorWarn"></span>
     </div>
     <div class="compare-body" id="compareBody"></div>
   </div>
@@ -773,25 +773,26 @@
       if (!ranges[m[1]]){ ranges[m[1]] = []; }
       ranges[m[1]][parseInt(m[2], 10)] = update[key];
     });
-    const xKeys = Object.keys(ranges).filter(function(key){ return key.charAt(0) === "x"; });
-    for (let i = 0; i < xKeys.length; i++){
-      const xKey = xKeys[i];
-      const suffix = xKey.slice("xaxis".length);
-      const yKey = "yaxis" + suffix;
-      const xr = ranges[xKey];
-      const yr = ranges[yKey];
-      if (!xr || !yr || xr[0] === undefined || xr[1] === undefined || yr[0] === undefined || yr[1] === undefined){ continue; }
-      if (String(xr[0]) === String(xr[1]) || String(yr[0]) === String(yr[1])){ continue; }
-      return {
-        xaxisKey: xKey,
-        yaxisKey: yKey,
-        xRef: axisRefFromKey(xKey),
-        yRef: axisRefFromKey(yKey),
-        xRange: [xr[0], xr[1]],
-        yRange: [yr[0], yr[1]]
-      };
+    function complete(r){
+      return r && r[0] !== undefined && r[1] !== undefined && String(r[0]) !== String(r[1]);
     }
-    return null;
+    const xKeys = Object.keys(ranges).filter(function(k){ return k.charAt(0) === "x" && complete(ranges[k]); });
+    const yKeys = Object.keys(ranges).filter(function(k){ return k.charAt(0) === "y" && complete(ranges[k]); });
+    if (xKeys.length === 0 || yKeys.length === 0){ return null; }
+    const xKey = xKeys[0];
+    const suffix = xKey.slice("xaxis".length);
+    // Apparie le meme suffixe si dispo (multi-subplots), sinon le premier Y
+    // complet : couvre le panneau d'erreur ou X="xaxis" est partage et Y="yaxis2".
+    const yKey = yKeys.indexOf("yaxis" + suffix) >= 0 ? "yaxis" + suffix : yKeys[0];
+    const xr = ranges[xKey], yr = ranges[yKey];
+    return {
+      xaxisKey: xKey,
+      yaxisKey: yKey,
+      xRef: axisRefFromKey(xKey),
+      yRef: axisRefFromKey(yKey),
+      xRange: [xr[0], xr[1]],
+      yRange: [yr[0], yr[1]]
+    };
   }
 
   function insetAxis(baseAxis, domain, anchor, range){
@@ -1448,6 +1449,9 @@
     if (!el){ return; }
     errorState = { active: true, refKey: errorRef.value, types: types };
     const merged = mergedPlotlyFigureWithErrors(figs, errorState.refKey, types);
+    // Replie la barre de config AVANT de dimensionner : le graphe (et le
+    // panneau d'erreur) prend toute la hauteur. Bouton « Erreur » pour rouvrir.
+    errorPanel.style.display = "none";
     Plotly.purge(el);
     renderPlotly(el, merged, true, null);
     Plotly.Plots.resize(el);
@@ -1463,6 +1467,7 @@
     errorState = { active: false, refKey: null, types: [] };
     errorWarn.textContent = "";
     const merged = mergedPlotlyFigure(figs);
+    errorPanel.style.display = "none";
     Plotly.purge(el);
     renderPlotly(el, merged, true, null);
     Plotly.Plots.resize(el);
@@ -1534,12 +1539,12 @@
     const curves = flattenCurves(figs);
     const ref = curves.filter(function(c){ return c.key === refKey; })[0] || curves[0];
 
-    // Vrai sous-graphe empile : x partage, repartition 60 / 40 avec un
-    // ecart franc entre les deux panneaux. L'axe X est ancre sous le
-    // panneau d'erreur (ticks en bas), le panneau du haut le partage.
-    layout.yaxis = Object.assign({}, layout.yaxis, { domain: [0.43, 1.0] });
+    // Vrai sous-graphe empile : x partage, repartition ~45 / 48 (panneau
+    // d'erreur agrandi) avec un ecart franc entre les deux panneaux. L'axe X
+    // est ancre sous le panneau d'erreur (ticks en bas), le haut le partage.
+    layout.yaxis = Object.assign({}, layout.yaxis, { domain: [0.55, 1.0] });
     layout.yaxis2 = {
-      domain: [0, 0.38], anchor: "x",
+      domain: [0, 0.48], anchor: "x",
       title: { text: allRelPct(typeIds) ? "erreur (%)" : "erreur" },
       zeroline: true, showgrid: true
     };
