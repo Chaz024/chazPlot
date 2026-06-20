@@ -101,4 +101,45 @@ check("clampPlacement: trop petit ramene a la taille mini", function () {
   assert.ok(r.yDomain[1] - r.yDomain[0] >= 0.12 - 1e-9, "hauteur mini non respectee");
 });
 
+// --- paperRectToPixels ---
+check("paperRectToPixels: mappe domaine -> pixels (y inverse)", function () {
+  const size = { l: 50, t: 20, w: 400, h: 300 };
+  const px = IL.paperRectToPixels({ xDomain: [0.25, 0.75], yDomain: [0.0, 1.0] }, size);
+  assert.ok(Math.abs(px.left - (50 + 0.25 * 400)) < 1e-9, "left");
+  assert.ok(Math.abs(px.width - (0.5 * 400)) < 1e-9, "width");
+  assert.ok(Math.abs(px.top - 20) < 1e-9, "top (yDomain haut=1 -> top=t)");
+  assert.ok(Math.abs(px.height - 300) < 1e-9, "height");
+});
+
+// --- pixelDeltaToPaper ---
+check("pixelDeltaToPaper: dy inverse, normalise par la taille", function () {
+  const size = { l: 0, t: 0, w: 200, h: 100 };
+  const d = IL.pixelDeltaToPaper(20, 10, size);
+  assert.ok(Math.abs(d.dx - 0.1) < 1e-9, "dx");
+  assert.ok(Math.abs(d.dy - (-0.1)) < 1e-9, "dy inverse");
+});
+
+// --- movePlacement ---
+check("movePlacement: translate les deux domaines", function () {
+  const p = IL.movePlacement({ xDomain: [0.2, 0.4], yDomain: [0.5, 0.7] }, 0.1, -0.05);
+  assert.ok(Math.abs(p.xDomain[0] - 0.3) < 1e-9 && Math.abs(p.xDomain[1] - 0.5) < 1e-9, "x");
+  assert.ok(Math.abs(p.yDomain[0] - 0.45) < 1e-9 && Math.abs(p.yDomain[1] - 0.65) < 1e-9, "y");
+});
+
+// --- resizePlacement ---
+check("resizePlacement: coin 'se' ancre le coin 'nw'", function () {
+  // se = est + sud : bouge x1 (droite) et y0 (bas) ; x0 et y1 ancres
+  const p = IL.resizePlacement({ xDomain: [0.2, 0.6], yDomain: [0.3, 0.7] }, "se", 0.1, -0.1, 0.12);
+  assert.ok(Math.abs(p.xDomain[0] - 0.2) < 1e-9, "x0 ancre");
+  assert.ok(Math.abs(p.xDomain[1] - 0.7) < 1e-9, "x1 deplace (+0.1)");
+  assert.ok(Math.abs(p.yDomain[1] - 0.7) < 1e-9, "y1 ancre");
+  assert.ok(Math.abs(p.yDomain[0] - 0.2) < 1e-9, "y0 deplace (dy=-0.1)");
+});
+check("resizePlacement: respecte la taille mini contre le coin ancre", function () {
+  // nw = ouest + nord : bouge x0 et y1 ; on tente d'ecraser au-dela du mini
+  const p = IL.resizePlacement({ xDomain: [0.2, 0.6], yDomain: [0.3, 0.7] }, "nw", 0.5, -0.5, 0.12);
+  assert.ok(Math.abs(p.xDomain[0] - 0.48) < 1e-9, "x0 borne par mini (x1 - 0.12)");
+  assert.ok(Math.abs(p.yDomain[1] - 0.42) < 1e-9, "y1 borne par mini (y0 + 0.12)");
+});
+
 console.log("\n" + passed + " tests OK");

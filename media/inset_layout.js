@@ -151,10 +151,53 @@
     return { xDomain: [x0, x0 + w], yDomain: [y0, y0 + h] };
   }
 
+  // ---- geometrie pixel <-> paper (pour l'overlay de drag/resize) ----
+  // placement paper -> rectangle pixel dans l'aire de trace. size = _fullLayout._size.
+  function paperRectToPixels(placement, size) {
+    const x0 = placement.xDomain[0], x1 = placement.xDomain[1];
+    const y0 = placement.yDomain[0], y1 = placement.yDomain[1];
+    return {
+      left: size.l + x0 * size.w,
+      top: size.t + (1 - y1) * size.h,   // y paper monte, y pixel descend
+      width: (x1 - x0) * size.w,
+      height: (y1 - y0) * size.h
+    };
+  }
+
+  // delta de deplacement en pixels -> delta en paper (dy inverse).
+  function pixelDeltaToPaper(dxPx, dyPx, size) {
+    return { dx: dxPx / size.w, dy: -dyPx / size.h };
+  }
+
+  // translation brute des deux domaines (bornage delegue a clampPlacement).
+  function movePlacement(placement, dxPaper, dyPaper) {
+    return {
+      xDomain: [placement.xDomain[0] + dxPaper, placement.xDomain[1] + dxPaper],
+      yDomain: [placement.yDomain[0] + dyPaper, placement.yDomain[1] + dyPaper]
+    };
+  }
+
+  // deplace le coin saisi, ancre le coin oppose, impose la taille mini.
+  // corner : 'n'/'s' = haut/bas (paper), 'e'/'w' = droite/gauche.
+  function resizePlacement(placement, corner, dxPaper, dyPaper, minSize) {
+    const ms = minSize == null ? 0.12 : minSize;
+    let x0 = placement.xDomain[0], x1 = placement.xDomain[1];
+    let y0 = placement.yDomain[0], y1 = placement.yDomain[1];
+    if (corner.indexOf("e") >= 0) { x1 = Math.max(x1 + dxPaper, x0 + ms); }
+    if (corner.indexOf("w") >= 0) { x0 = Math.min(x0 + dxPaper, x1 - ms); }
+    if (corner.indexOf("n") >= 0) { y1 = Math.max(y1 + dyPaper, y0 + ms); }
+    if (corner.indexOf("s") >= 0) { y0 = Math.min(y0 + dyPaper, y1 - ms); }
+    return { xDomain: [x0, x1], yDomain: [y0, y1] };
+  }
+
   return {
     makeInsetCandidates: makeInsetCandidates,
     scoreInsetCandidate: scoreInsetCandidate,
     chooseInsetDomain: chooseInsetDomain,
-    clampPlacement: clampPlacement
+    clampPlacement: clampPlacement,
+    paperRectToPixels: paperRectToPixels,
+    pixelDeltaToPaper: pixelDeltaToPaper,
+    movePlacement: movePlacement,
+    resizePlacement: resizePlacement
   };
 });
