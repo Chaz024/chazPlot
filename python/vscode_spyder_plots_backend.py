@@ -44,10 +44,12 @@ def _anim_max_frames():
 
 
 def _port():
+    """Port du serveur de l'extension, depuis l'env injecte (defaut 53210)."""
     return os.environ.get("VSCODE_PLOTS_PORT", "53210")
 
 
 def _port_file_path():
+    """Chemin du fichier tmp ou l'extension publie son port actif (fallback)."""
     import tempfile
     return os.path.join(tempfile.gettempdir(), "chaz-plots-port.json")
 
@@ -63,6 +65,7 @@ def _port_from_file():
 
 
 def _dpi():
+    """DPI de rendu des figures statiques (env VSCODE_PLOTS_DPI, defaut 200)."""
     try:
         return float(os.environ.get("VSCODE_PLOTS_DPI", "200"))
     except ValueError:
@@ -227,6 +230,7 @@ def _send_figure(payload):
 
 
 def _figure_title(manager):
+    """Titre de la figure : le window title s'il existe, sinon "Figure <num>"."""
     title = None
     try:
         title = manager.get_window_title()

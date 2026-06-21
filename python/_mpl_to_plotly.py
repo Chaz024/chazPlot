@@ -100,6 +100,8 @@ def _colorscale(cmap, n=16):
     return scale
 
 
+# Une etiquette mpl est affichable en legende si elle est non vide et ne commence
+# pas par "_" (mpl masque ces labels internes).
 def _label_ok(label):
     return isinstance(label, str) and label != "" and not label.startswith("_")
 
@@ -118,6 +120,8 @@ def _finite_list(values):
 
 
 def _color_at(colors, index=0, default="rgba(0,0,0,0.25)"):
+    """Couleur Plotly a `index` dans un tableau de couleurs mpl (borne au
+    dernier element), ou `default` si vide/invalide."""
     try:
         if colors is None or len(colors) == 0:
             return default
@@ -127,6 +131,7 @@ def _color_at(colors, index=0, default="rgba(0,0,0,0.25)"):
 
 
 def _number_at(values, index=0, default=0.0):
+    """Nombre a `index` dans un tableau (borne au dernier), ou `default`."""
     try:
         if values is None or len(values) == 0:
             return default
@@ -136,6 +141,8 @@ def _number_at(values, index=0, default=0.0):
 
 
 def _axis_value(value, is_date=False):
+    """Valeur prete pour Plotly : ISO si axe date, float fini sinon ; None si
+    non convertible."""
     if is_date:
         arr = _as_float_array([value])
         if arr.size == 0 or not np.isfinite(arr[0]):
@@ -287,7 +294,19 @@ def _convert_line(line, axis_suffix):
 
 
 
+# --- errorbar -> scatter + barres d'erreur Plotly ---------------------------
+# matplotlib eclate un errorbar en plusieurs artistes : la ligne de donnees, les
+# caplines, et la LineCollection des barres. Pipeline de conversion :
+#   _errorbar_parts            separe ces 3 morceaux ;
+#   _error_arrays_from_segments reconstruit les amplitudes +/- par point depuis
+#                              les segments des barres ;
+#   _points_from_errorbar_collections / _nearest_point_index : secours quand il
+#                              n'y a pas de ligne de donnees ;
+#   _plotly_error_dict         formate error_x / error_y ;
+#   _convert_errorbar          assemble le tout en une trace.
 def _errorbar_parts(container):
+    """(ligne de donnees, caplines, barres) d'un ErrorbarContainer ; tuples
+    vides si indisponible."""
     try:
         data_line, caplines, barlinecols = container.lines
     except Exception:
@@ -351,6 +370,10 @@ def _nearest_point_index(x, y, px, py):
 
 
 def _error_arrays_from_segments(barlinecols, x, y):
+    """Reconstruit les amplitudes d'erreur par point depuis les segments des
+    barres : un segment vertical donne err_y +/-, horizontal err_x +/-, rattache
+    au point (x, y) le plus proche de son milieu. Renvoie (err_x, err_y), chacun
+    (plus, minus) ou None si cet axe n'a pas de barres."""
     plus_x = np.zeros(x.shape, dtype=float)
     minus_x = np.zeros(x.shape, dtype=float)
     plus_y = np.zeros(y.shape, dtype=float)
@@ -414,6 +437,9 @@ def _plotly_error_dict(values, color, cap_width):
 
 
 def _convert_errorbar(container, axis_suffix):
+    """ErrorbarContainer -> trace scatter avec error_x/error_y. Reutilise la
+    ligne de donnees si presente, sinon reconstruit les points depuis les
+    barres. Renvoie (trace, n_points), ou (None, 0) si rien d'exploitable."""
     data_line, caplines, barlinecols = _errorbar_parts(container)
     cap_width = 4 if len(caplines) > 0 else 0
 
@@ -459,6 +485,9 @@ def _convert_errorbar(container, axis_suffix):
 
 
 def _convert_poly_collection(collection, axis_suffix):
+    """PolyCollection (fill_between, aires remplies) -> traces scatter
+    `fill:'toself'`, une par polygone. Conserve la couleur de remplissage et son
+    alpha. Renvoie (liste de traces, n_points)."""
     try:
         paths = list(collection.get_paths())
     except Exception:
@@ -507,6 +536,8 @@ def _convert_poly_collection(collection, axis_suffix):
 
 
 def _convert_scatter(collection, axis_suffix):
+    """PathCollection (scatter) -> trace markers, avec couleurs/tailles par point
+    et colormap eventuelle. Renvoie (trace, n_points)."""
     offsets = np.asarray(collection.get_offsets(), dtype=float)
     if offsets.size == 0:
         return None, 0
@@ -558,6 +589,8 @@ def _convert_scatter(collection, axis_suffix):
 
 
 def _convert_bars(container, axis_suffix):
+    """BarContainer (bar/barh) -> trace bar Plotly (orientation v/h selon les
+    rectangles). Renvoie (trace, n_barres)."""
     rects = [p for p in container.patches if isinstance(p, Rectangle)]
     if len(rects) == 0:
         return None, 0
@@ -597,6 +630,8 @@ def _convert_bars(container, axis_suffix):
 
 
 def _convert_image(image, axis_suffix):
+    """AxesImage (imshow) -> heatmap (donnees 2D) ou image (RGB/RGBA). Renvoie
+    (trace, n_pixels)."""
     data = np.asarray(image.get_array())
     extent = image.get_extent()  # (left, right, bottom, top)
     n_points = int(data.shape[0]) * int(data.shape[1])
@@ -637,6 +672,7 @@ def _convert_image(image, axis_suffix):
 
 
 def _convert_quadmesh(mesh, axis_suffix):
+    """QuadMesh (pcolormesh) -> heatmap Plotly. Renvoie (trace, n_cellules)."""
     coords = np.asarray(mesh.get_coordinates(), dtype=float)  # (M+1, N+1, 2)
     z = np.asarray(mesh.get_array(), dtype=float)
     rows = coords.shape[0] - 1
@@ -667,7 +703,18 @@ def _convert_quadmesh(mesh, axis_suffix):
 
 
 
+# --- text() / annotate() -> layout.annotations -----------------------------
+# _coord_kind     : classe le systeme de coordonnees (data / fraction d'axe /
+#                   papier figure / offset points|pixels) d'un texte.
+# _coord_pair_to_plotly : mappe un point (x, y) vers une position Plotly
+#                   (valeur + xref/yref, ou offset ax/ay).
+# _base_text_annotation : annotation Plotly de base (texte, police, ancres,
+#                   rotation, opacite) sans la position.
+# _append_plotly_texts : parcourt ax.texts et pousse les annotations dans
+#                   layout["annotations"], avec fleche pour les annotate().
 def _coord_kind(coord, ax):
+    """Type de coordonnees d'un texte : 'data', 'axes_fraction', 'paper',
+    'offset_points', 'offset_pixels' (defaut 'data')."""
     try:
         if coord == ax.transData:
             return "data"
@@ -691,6 +738,10 @@ def _coord_kind(coord, ax):
 
 
 def _coord_pair_to_plotly(ax, coords, point, xref, yref, position, x_is_date, y_is_date):
+    """Mappe un point (px, py) exprime dans `coords` (transform ou chaine mpl)
+    vers Plotly. Renvoie soit {kind:'position', x, y, xref, yref} (data ou paper,
+    fraction d'axe ramenee au domaine via `position`), soit {kind:'offset', x, y}
+    (decalage en pixels pour offset points/pixels), soit None si inexploitable."""
     try:
         px, py = point
     except Exception:
@@ -789,6 +840,10 @@ def _base_text_annotation(text):
 
 
 def _append_plotly_texts(layout, ax, xref, yref, position, x_is_date, y_is_date):
+    """Convertit ax.texts (text() et annotate()) en entrees
+    layout["annotations"]. Les annotate() avec fleche deviennent des annotations
+    `showarrow` (cible xy + ancrage xytext). `position` = ax.get_position()
+    (domaine de l'axe en coords papier), pour les coordonnees en fraction d'axe."""
     for text in getattr(ax, "texts", []):
         try:
             label = text.get_text()
@@ -871,6 +926,12 @@ def _append_plotly_texts(layout, ax, xref, yref, position, x_is_date, y_is_date)
 # Detection des artistes non supportes (-> fallback SVG)
 # ------------------------------------------------------------
 def _has_unsupported_artist(ax, bar_rectangles, supported_collections=None, supported_patches=None):
+    """FRONTIERE DE CORRECTION : True si l'axe contient un artiste qu'on ne sait
+    pas convertir fidelement -> l'appelant (convert_figure) renvoie None et tout
+    bascule en SVG. On laisse passer les types geres + les sous-artistes
+    "reclames" (rectangles de barres, LineCollection d'errorbar, fleches
+    d'annotations) fournis dans bar_rectangles / supported_collections /
+    supported_patches. Tout le reste (contour, quiver, patch libre...) = refus."""
     from matplotlib.collections import Collection
     from matplotlib.patches import Patch
     from matplotlib.spines import Spine
@@ -905,7 +966,10 @@ def _has_unsupported_artist(ax, bar_rectangles, supported_collections=None, supp
 # ------------------------------------------------------------
 # Classification des axes (detection twinx)
 # ------------------------------------------------------------
+# _shares_x + _same_position servent a detecter un twinx : deux axes qui
+# partagent le X et occupent exactement la meme place (meme rectangle).
 def _shares_x(a, b):
+    """True si a et b partagent le meme axe X (candidats twinx)."""
     try:
         return b in a.get_shared_x_axes().get_siblings(a)
     except Exception:
@@ -913,6 +977,7 @@ def _shares_x(a, b):
 
 
 def _same_position(a, b, eps=1e-3):
+    """True si a et b occupent le meme rectangle (a eps pres)."""
     pa = a.get_position()
     pb = b.get_position()
     return (
