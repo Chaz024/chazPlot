@@ -85,11 +85,13 @@
     display:inline-flex; align-items:center; justify-content:center;
     width:28px; height:28px; padding:0; border-radius:6px;
     border:1px solid transparent; background:transparent;
-    color: var(--vscode-foreground); opacity:.8;
+    color: var(--sp-text); opacity:.75;
+    transition: background .13s ease, opacity .13s ease, border-color .13s ease;
   }
   .iconbtn:hover{ background: var(--vscode-toolbar-hoverBackground, rgba(127,127,127,.18)); opacity:1; }
-  .iconbtn.active{ background: rgba(55,148,255,.24); border-color: rgba(55,148,255,.55); opacity:1; }
-  .iconbtn.has-inset{ color: var(--vscode-charts-blue, #3794ff); opacity:1; }
+  .iconbtn:focus-visible{ outline:2px solid var(--sp-accent); outline-offset:1px; }
+  .iconbtn.active{ background: var(--sp-accent-soft); border-color: var(--sp-accent); opacity:1; }
+  .iconbtn.has-inset{ color: var(--sp-accent); opacity:1; }
   .iconbtn svg{ width:15px; height:15px; fill: currentColor; }
   .textbtn{
     min-width:34px; height:28px; padding:0 8px; border-radius:6px;
@@ -192,8 +194,8 @@
   .overlay.show{ display:flex; }
   .overlay .obar{
     display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-    padding:8px 14px; border-bottom:1px solid var(--vscode-panel-border, #3c3c3c);
-    background: var(--vscode-sideBar-background, #252526);
+    padding:10px 16px; border-bottom:1px solid var(--sp-border);
+    background: var(--sp-surface-2);
   }
   .overlay .obar .otitle{ font-weight:600; font-size:13px; }
   .overlay .obar .spacer{ flex:1; }
@@ -211,7 +213,7 @@
     flex:1; min-width:0; min-height:0;
     display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     grid-auto-rows:minmax(280px, 1fr);
-    gap:1px; background: var(--vscode-panel-border, #3c3c3c);
+    gap:1px; background: var(--sp-border);
     overflow:auto; align-content:start;
   }
   .compare-pane{ min-width:0; min-height:0; display:flex; flex-direction:column; background: var(--sp-plot-bg); }
@@ -240,15 +242,22 @@
   .compare-layer img{ max-width:100%; max-height:100%; object-fit:contain; }
   .compare-layer.secondary{ opacity:.55; mix-blend-mode:multiply; pointer-events:none; }
   .compare-stack .compare-plot{ width:100%; height:100%; }
-  .opacity-control{ display:none; align-items:center; gap:8px; font-size:12px; opacity:.9; }
-  .opacity-control input{ width:150px; accent-color: var(--vscode-charts-blue, #3794ff); }
+  .opacity-control{ display:none; align-items:center; gap:8px; font-size:12px; color: var(--sp-text); }
+  .opacity-control input{ width:150px; accent-color: var(--sp-accent); }
   .error-panel{
     display:flex; align-items:center; gap:12px; flex-wrap:wrap;
-    padding:6px 14px; font-size:12px;
-    background: var(--vscode-sideBar-background, #252526);
-    border-bottom:1px solid var(--vscode-panel-border, #3c3c3c);
+    padding:8px 16px; font-size:12px;
+    background: var(--sp-surface-2);
+    border-bottom:1px solid var(--sp-border);
   }
-  .error-panel .error-types{ display:flex; gap:10px; flex-wrap:wrap; }
+  .error-panel .error-types{ display:flex; gap:8px; flex-wrap:wrap; }
+  .error-panel .error-types label{
+    display:inline-flex; align-items:center; gap:6px;
+    padding:3px 9px; border-radius:999px;
+    border:1px solid var(--sp-border); background: var(--sp-surface);
+    cursor:pointer;
+  }
+  .error-panel .error-types input{ accent-color: var(--sp-accent); margin:0; }
   .error-panel select{ margin-left:4px; }
   .error-warn{ color: var(--vscode-charts-yellow, #cca700); font-size:11px; }
     .inset-overlay {
@@ -256,9 +265,9 @@
       cursor: move; background: transparent; touch-action: none;
     }
     .inset-handle {
-      position: absolute; width: 12px; height: 12px; box-sizing: border-box;
-      background: #fff; border: 2px solid rgba(55,148,255,0.95);
-      border-radius: 2px; touch-action: none;
+      position: absolute; width: 11px; height: 11px; box-sizing: border-box;
+      background: #fff; border: 2px solid var(--sp-accent);
+      border-radius: 3px; box-shadow: var(--sp-shadow-1); touch-action: none;
     }
     .inset-handle-nw { left: -6px; top: -6px; cursor: nwse-resize; }
     .inset-handle-ne { right: -6px; top: -6px; cursor: nesw-resize; }
