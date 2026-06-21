@@ -39,18 +39,21 @@
   .toolbar{
     position:sticky; top:0; z-index:20;
     display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-    padding:8px 14px;
-    background: var(--vscode-sideBar-background, #252526);
-    border-bottom:1px solid var(--vscode-panel-border, #3c3c3c);
+    padding:10px 16px;
+    background: var(--sp-surface-2);
+    border-bottom:1px solid var(--sp-border);
   }
   .toolbar .brand{ font-weight:600; letter-spacing:.2px; display:flex; align-items:center; gap:8px; }
   .toolbar .brand .dot{ width:9px; height:9px; border-radius:50%;
     background: var(--vscode-charts-blue, #3794ff); box-shadow:0 0 0 3px rgba(55,148,255,.25); }
   .toolbar .count{ font-size:12px; opacity:.7; }
   .toolbar .compare-status{ font-size:12px; opacity:.78; white-space:nowrap; }
-  .toolbar .search{ min-width:180px; width:20vw; max-width:320px; padding:4px 8px; border-radius:5px;
-    border:1px solid var(--vscode-input-border, transparent); background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground); font-family:inherit; font-size:12px; }
+  .toolbar .search{ min-width:180px; width:20vw; max-width:320px; padding:5px 9px; border-radius:6px;
+    border:1px solid var(--vscode-input-border, var(--sp-border)); background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground); font-family:inherit; font-size:12px;
+    transition: border-color .13s ease, box-shadow .13s ease; }
+  .toolbar .search:focus-visible{ outline:none; border-color: var(--sp-accent);
+    box-shadow:0 0 0 2px var(--sp-accent-soft); }
   .toolbar .spacer{ flex:1; }
   label.fit{ font-size:12px; display:flex; align-items:center; gap:6px; opacity:.85; user-select:none; cursor:pointer; }
 
@@ -60,14 +63,22 @@
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
     border-radius:6px; padding:5px 11px;
-    transition: background .12s ease, transform .06s ease;
+    transition: background .13s ease, transform .06s ease, box-shadow .13s ease;
   }
   button:hover{ background: var(--vscode-button-secondaryHoverBackground); }
   button:active{ transform: translateY(1px); }
+  button:focus-visible{ outline:2px solid var(--sp-accent); outline-offset:1px; }
   button.primary{ background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   button.primary:hover{ background: var(--vscode-button-hoverBackground); }
   button:disabled{ opacity:.4; cursor:default; }
   button.compact{ padding:4px 9px; }
+
+  /* groupe segmente (boutons de comparaison) */
+  .segmented{ display:inline-flex; }
+  .segmented button{ border-radius:0; }
+  .segmented button + button{ border-left:none; }
+  .segmented button:first-child{ border-top-left-radius:6px; border-bottom-left-radius:6px; }
+  .segmented button:last-child{ border-top-right-radius:6px; border-bottom-right-radius:6px; }
 
   /* boutons icones */
   .iconbtn{
@@ -256,8 +267,10 @@
     <input class="search" id="searchInput" type="search" placeholder="Filtrer titre ou tag" title="Filtrer les graphes par titre ou tag">
     <span class="spacer"></span>
     <span class="compare-status" id="compareStatus">0 selectionne</span>
-    <button class="compact" id="compareSide" disabled>Cote a cote</button>
-    <button class="compact" id="compareStack" disabled>Superposer</button>
+    <span class="segmented">
+      <button class="compact" id="compareSide" disabled>Cote a cote</button>
+      <button class="compact" id="compareStack" disabled>Superposer</button>
+    </span>
     <label class="fit"><input type="checkbox" id="fitToggle" checked> Ajuster à la largeur</label>
     <button class="primary" id="saveAll">Tout enregistrer</button>
     <button id="deleteAll">Tout supprimer</button>
