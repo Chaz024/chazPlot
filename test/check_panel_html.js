@@ -9,7 +9,7 @@ const html = fs.readFileSync(file, "utf8");
 
 const placeholders = [
   "{{nonce}}", "{{cspSource}}", "{{plotlyUri}}",
-  "{{errorMathUri}}", "{{insetLayoutUri}}",
+  "{{errorMathUri}}", "{{insetLayoutUri}}", "{{plotNavUri}}",
 ];
 const requiredIds = [
   "count", "searchInput", "compareStatus", "compareSide", "compareStack",

@@ -6,6 +6,7 @@
 <script src="{{plotlyUri}}"></script>
 <script src="{{errorMathUri}}"></script>
 <script src="{{insetLayoutUri}}"></script>
+<script src="{{plotNavUri}}"></script>
 <style>
   :root{
     color-scheme: light dark;
@@ -1139,6 +1140,85 @@
     if (el.parentElement){ el.parentElement.classList.toggle("sp-inset-armed", !!el._spInsetArmed); }
     if (coordsEl){ coordsEl.textContent = el._spInsetArmed ? "Mode encart : trace une zone a agrandir" : ""; }
   }
+  // Navigation bonus (zoom molette + pan clic-milieu). Travaille sur tous les
+  // axes x/y du graphe via _fullLayout, donc gere subplots, twinx (y2) et le
+  // sous-graphe d'erreur. S'appuie sur le module pur PlotNav.
+  const PLOT_ZOOM_STEP = 1.15;
+  function navAxes(el, letter){
+    const fl = el && el._fullLayout, out = [];
+    if (!fl){ return out; }
+    for (const key in fl){
+      if (key.indexOf(letter + "axis") !== 0){ continue; }
+      const ax = fl[key];
+      if (ax && typeof ax.r2l === "function" && typeof ax.l2r === "function"
+          && isFinite(ax._offset) && isFinite(ax._length) && ax.range){
+        out.push({ key: key, ax: ax });
+      }
+    }
+    return out;
+  }
+  function navRangeInto(upd, key, ax, compute){
+    const l0 = ax.r2l(ax.range[0]), l1 = ax.r2l(ax.range[1]);
+    const nl = compute(l0, l1);
+    upd[key + ".range"] = [ax.l2r(nl[0]), ax.l2r(nl[1])];
+  }
+  function attachPlotNav(el){
+    if (!el || el._spNavBound){ return; }
+    el._spNavBound = true;
+
+    // Ctrl/Cmd + molette : zoom centre sur le curseur. Molette seule => la page
+    // continue de defiler (on ne preventDefault qu'avec le modificateur).
+    el.addEventListener("wheel", function(e){
+      if (!(e.ctrlKey || e.metaKey)){ return; }
+      if (typeof Plotly === "undefined" || !el._fullLayout){ return; }
+      e.preventDefault();
+      const bb = el.getBoundingClientRect();
+      const px = e.clientX - bb.left, py = e.clientY - bb.top;
+      const factor = e.deltaY < 0 ? PLOT_ZOOM_STEP : 1 / PLOT_ZOOM_STEP;
+      const upd = {};
+      navAxes(el, "x").forEach(function(en){
+        const a = (px - en.ax._offset) / en.ax._length;
+        if (a >= 0 && a <= 1){ navRangeInto(upd, en.key, en.ax, function(l0, l1){ return PlotNav.zoomRange(l0, l1, a, factor); }); }
+      });
+      navAxes(el, "y").forEach(function(en){
+        const a = 1 - (py - en.ax._offset) / en.ax._length;
+        if (a >= 0 && a <= 1){ navRangeInto(upd, en.key, en.ax, function(l0, l1){ return PlotNav.zoomRange(l0, l1, a, factor); }); }
+      });
+      if (Object.keys(upd).length){ Plotly.relayout(el, upd); }
+    }, { passive: false });
+
+    // Clic-molette (bouton du milieu) maintenu : pan.
+    let panning = false, lastX = 0, lastY = 0;
+    el.addEventListener("pointerdown", function(e){
+      if (e.button !== 1 || !el._fullLayout){ return; }
+      e.preventDefault();
+      panning = true; lastX = e.clientX; lastY = e.clientY;
+      try { el.setPointerCapture(e.pointerId); } catch (err) {}
+      el.style.cursor = "grabbing";
+    });
+    el.addEventListener("pointermove", function(e){
+      if (!panning){ return; }
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      const upd = {};
+      navAxes(el, "x").forEach(function(en){
+        const f = dx / en.ax._length;   // pointeur a droite => vue vers la gauche
+        navRangeInto(upd, en.key, en.ax, function(l0, l1){ return PlotNav.panRange(l0, l1, f); });
+      });
+      navAxes(el, "y").forEach(function(en){
+        const f = -dy / en.ax._length;  // pixel vers le bas => valeurs basses
+        navRangeInto(upd, en.key, en.ax, function(l0, l1){ return PlotNav.panRange(l0, l1, f); });
+      });
+      if (Object.keys(upd).length){ Plotly.relayout(el, upd); }
+    });
+    function endPan(e){
+      if (!panning){ return; }
+      panning = false; el.style.cursor = "";
+      try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+    }
+    el.addEventListener("pointerup", endPan);
+    el.addEventListener("pointercancel", endPan);
+  }
   function renderPlotly(el, fig, fill, coordsEl){
     if (!fig.plotly || !el || typeof Plotly === "undefined"){ return; }
     const layout = JSON.parse(JSON.stringify(fig.plotly.layout || {}));
@@ -1173,6 +1253,7 @@
     el._spConfig = config;
     el._spHasInset = false;
     Plotly.newPlot(el, data, layout, config);
+    attachPlotNav(el);
     if (el.on){
       el.on("plotly_relayout", function(update){
         // Mode encart arme par Ctrl+clic sur la loupe : le trace de zoom
