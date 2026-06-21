@@ -15,3 +15,10 @@ env/
 
 # Brouillons de travail (plans/agents superpowers) — jamais versionnés
 .superpowers/
+
+# Docs internes / config IA — non destinées à un utilisateur externe
+.claude/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+docs/
