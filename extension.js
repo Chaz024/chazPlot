@@ -1,9 +1,31 @@
-// ============================================================
-// Chaz Plots — extension VS Code
-// Reçoit les figures matplotlib envoyées par le backend Python
-// (python/vscode_spyder_plots_backend.py) et les affiche dans un
-// panneau webview scrollable, façon volet "Graphes" de Spyder.
-// ============================================================
+// ============================================================================
+// Chaz Plots — hote de l'extension VS Code (cote Node).
+//
+// Role : recevoir les figures matplotlib envoyees par le backend Python
+// (python/vscode_spyder_plots_backend.py) et les afficher dans un panneau
+// webview scrollable, facon volet « Graphes » de Spyder. L'UI elle-meme vit
+// dans media/panel.html ; ce fichier n'est que la plomberie autour.
+//
+// Vue d'ensemble :
+//   1. activate() demarre un serveur HTTP local (startServer) sur 127.0.0.1 et
+//      injecte des variables d'env dans les NOUVEAUX terminaux (injectEnvironment)
+//      pour que le backend Python sache ou POSTer ses figures.
+//   2. Le backend POST /figure -> addFigure() cree une `fig`, la persiste
+//      (storage.js) et l'envoie au webview.
+//   3. Le panneau (ensurePanel/setupPanel) rend media/panel.html et dialogue
+//      avec lui par postMessage (routeur dans setupPanel.onDidReceiveMessage).
+//
+// Contrat /figure (corps JSON) : au moins un de plotly | svg | png | frames.
+// Detail du format et du protocole dans CLAUDE.md.
+//
+// Pieges (lire avant de modifier) :
+//   - L'injection d'env ne touche QUE les terminaux ouverts APRES activation
+//     (gotcha n°1 du support : « ouvrez un terminal neuf »).
+//   - Le port peut glisser (+1 si occupe, jusqu'a +20) ; on ecrit aussi le port
+//     dans un fichier tmp (writePortFile) comme repli pour le backend.
+//   - retainContextWhenHidden + WebviewPanelSerializer : le panneau survit au
+//     masquage / detachement sur un autre ecran.
+// ============================================================================
 "use strict";
 
 const vscode = require("vscode");
@@ -12,18 +34,22 @@ const path = require("path");
 const fs = require("fs");
 const storage = require("./storage");
 
-let panel = null;          // WebviewPanel unique
-let figures = [];          // [{id, png(base64), title, ts}]
-let nextId = 1;
-let server = null;
-let extContext = null;
-let activePort = null;
-let nextExportRequestId = 1;
-const pendingExports = {};
+// --- Etat global du module ---
+let panel = null;          // l'unique WebviewPanel (null si ferme)
+let figures = [];          // figures en memoire : { id, title, ts, tags[], et UNE
+                           // representation : plotly | svg | png | frames }
+let nextId = 1;            // prochain id (continue apres un rechargement)
+let server = null;         // serveur HTTP local
+let extContext = null;     // ExtensionContext (chemins, storage, env)
+let activePort = null;     // port effectivement ecoute
+let nextExportRequestId = 1; // correle un export Plotly async a sa reponse
+const pendingExports = {};   // requestId -> { filePath, title } en attente
 
 // ------------------------------------------------------------
 // Activation
 // ------------------------------------------------------------
+// Point d'entree VS Code : restaure les figures persistees, lance le serveur
+// HTTP, enregistre le serialiseur de panneau et les commandes. Appele une fois.
 function activate(context) {
   extContext = context;
   storage.init(context);
@@ -64,6 +90,9 @@ function deactivate() {
 // ------------------------------------------------------------
 // Serveur HTTP local : reçoit les figures du backend Python
 // ------------------------------------------------------------
+// POST /figure -> addFigure ; GET /ping -> sonde de vie. Si le port est occupe
+// (EADDRINUSE), reessaie sur port+1 jusqu'a +20 (attempt). A l'ecoute, publie
+// le port (env des nouveaux terminaux + fichier tmp).
 function startServer(port, attempt) {
   server = http.createServer(function (req, res) {
     if (req.method === "POST" && req.url === "/figure") {
@@ -151,6 +180,9 @@ function injectEnvironment(port) {
 // ------------------------------------------------------------
 // Gestion des figures
 // ------------------------------------------------------------
+// Construit une `fig` normalisee depuis le payload /figure (chaque format
+// optionnel -> null si absent), lui attribue un id, la persiste, ouvre le
+// panneau si besoin et l'envoie au webview.
 function addFigure(data) {
   const hasFrames = Array.isArray(data.frames) && data.frames.length > 0;
   const fig = {
@@ -232,6 +264,10 @@ function defaultName(fig, ext) {
   return base + "." + ext;
 }
 
+// Ecrit une figure NON-Plotly sur disque (PNG/SVG/frame d'animation). Le format
+// vient de l'extension du chemin ; si le format demande manque, repli sur ce
+// qui est disponible en corrigeant l'extension. Renvoie true si un fichier a
+// ete ecrit. (Les figures Plotly passent par saveOne -> export async cote webview.)
 function writeFigure(fig, filePath, frameIndex) {
   // le format est deduit de l'extension du chemin choisi
   const wantSvg = filePath.toLowerCase().endsWith(".svg");
@@ -317,6 +353,11 @@ async function plotlyExportOptions(fig) {
   };
 }
 
+// Enregistre UNE figure. Deux chemins :
+//   - figure Plotly : seul le webview detient la figure vivante, donc on lui
+//     demande l'image (postMessage exportPlotly + requestId) ; la reponse
+//     revient dans finishPlotlyExport via le message exportResult.
+//   - sinon (png/svg/animation) : ecriture synchrone par writeFigure.
 async function saveOne(id, frameIndex) {
   const fig = figures.find(function (f) { return f.id === id; });
   if (!fig) { return; }
@@ -358,6 +399,8 @@ async function saveOne(id, frameIndex) {
   });
 }
 
+// Reponse async d'un export Plotly : retrouve la requete par requestId et ecrit
+// la data URL renvoyee par le webview au chemin choisi dans saveOne.
 function finishPlotlyExport(msg) {
   const request = pendingExports[msg.requestId];
   if (!request) { return; }
@@ -373,6 +416,9 @@ function finishPlotlyExport(msg) {
     vscode.window.showErrorMessage("Chaz Plots : echec de l'ecriture de l'export (" + String(err) + ")");
   }
 }
+// Export LaTeX PGF/TikZ. NB : le backend ne genere plus de PGF (fig.pgf est
+// toujours null aujourd'hui), donc ces chemins sont inactifs et le webview
+// n'affiche pas le bouton. Conserves au cas ou le PGF reviendrait.
 function pgfText(fig) {
   if (!fig || fig.pgf === null) { return null; }
   return Buffer.from(fig.pgf, "base64").toString("utf8");
@@ -455,6 +501,10 @@ function workspaceDir() {
 // ------------------------------------------------------------
 // Panneau webview
 // ------------------------------------------------------------
+// Configure un WebviewPanel : options + HTML, et branche le routeur des
+// messages venant du webview (protocole webview -> extension : save, copyPgf,
+// savePgf, exportResult, updateTags, editTags, saveAll, delete, deleteAll,
+// copied, copyFailed, ready). Le sens inverse passe par postToWebview.
 function setupPanel(p) {
   p.webview.options = {
     enableScripts: true,
@@ -490,6 +540,8 @@ function setupPanel(p) {
   });
 }
 
+// Garantit qu'un panneau existe : revele l'existant (sans le rapatrier s'il est
+// detache, d'ou viewColumn undefined) ou en cree un neuf a cote de l'editeur.
 function ensurePanel(reveal) {
   if (panel) {
     if (reveal) {
@@ -521,6 +573,11 @@ function postToWebview(message) {
 // ------------------------------------------------------------
 // HTML du webview — interface façon volet Graphes de Spyder
 // ------------------------------------------------------------
+// Lit media/panel.html et substitue les placeholders {{...}} : nonce CSP,
+// cspSource, et les URIs webview des scripts bundles (plotly, error_math,
+// inset_layout, plot_nav). Tout nouveau script bundle = nouveau placeholder ici
+// + dans panel.html + dans test/check_panel_html.js. Repli : page d'erreur si
+// panel.html est introuvable (extension mal installee).
 function webviewHtml(webview) {
   const nonce = String(Date.now()) + String(Math.floor(Math.random() * 100000));
   const plotlyUri = webview.asWebviewUri(

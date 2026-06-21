@@ -1,7 +1,19 @@
 // ============================================================
-// storage.js — persistance des figures (disque + index workspace)
-// Les figures survivent a un Reload Window. Best-effort : toute
-// erreur d'E/S est journalisee et n'interrompt jamais l'affichage.
+// storage.js — persistance des figures (disque + index workspace).
+//
+// Modele a deux niveaux :
+//   - 1 fichier JSON par figure : <storageUri>/figures/<id>.json (lourd : png,
+//     frames... ; lecture/ecriture asynchrone).
+//   - 1 index leger dans workspaceState (cle "chazPlots.index") :
+//     { nextId, figures: [{ id, title, tags, ts }] } (synchrone ; sert d'ordre
+//     et de table des matieres sans relire les gros fichiers).
+// storageUri est par-workspace ; repli sur globalStorageUri sinon. Si aucun des
+// deux n'existe, figuresDir reste null et tout devient no-op (pas de persistance).
+//
+// Les figures survivent a un Reload Window (extension.js appelle loadAll au
+// demarrage). Best-effort : toute erreur d'E/S est ignoree et n'interrompt
+// jamais l'affichage. Plafond configurable (maxPersistedFigures) -> eviction
+// des plus anciennes.
 // ============================================================
 "use strict";
 
@@ -10,9 +22,11 @@ const path = require("path");
 const fs = require("fs");
 
 const INDEX_KEY = "chazPlots.index";
-let ctx = null;
-let figuresDir = null;
+let ctx = null;            // ExtensionContext (acces workspaceState)
+let figuresDir = null;     // dossier des fichiers figure, ou null si indispo
 
+// A appeler une fois au demarrage : memorise le contexte et cree le dossier
+// des figures. En cas d'echec, figuresDir = null -> persistance desactivee.
 function init(context) {
   ctx = context;
   const base = context.storageUri || context.globalStorageUri;
