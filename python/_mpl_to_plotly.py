@@ -4,11 +4,14 @@
 # (data + layout) pour un rendu interactif dans le panneau.
 #
 # Artistes supportes :
-#   - Line2D            (plot, axhline, axvline, errorbar partiel)
+#   - Line2D            (plot, axhline, axvline)
+#   - ErrorbarContainer (errorbar : barres X/Y)
 #   - PathCollection    (scatter, avec couleurs/tailles/colormap)
+#   - PolyCollection    (fill_between, zones remplies)
 #   - BarContainer      (bar, barh)
 #   - AxesImage         (imshow : 2D -> heatmap, RGB -> image)
 #   - QuadMesh          (pcolormesh -> heatmap)
+#   - Text/Annotation   (text, annotate)
 # Gere : sous-graphes, titres, labels, limites, echelle log,
 #        grille, legendes, colormaps.
 #
@@ -20,10 +23,11 @@
 import numpy as np
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
-from matplotlib.collections import PathCollection, QuadMesh
+from matplotlib.collections import PathCollection, QuadMesh, PolyCollection
 from matplotlib.image import AxesImage
-from matplotlib.container import BarContainer
+from matplotlib.container import BarContainer, ErrorbarContainer
 from matplotlib.patches import Rectangle
+from matplotlib.text import Annotation
 
 _MAX_POINTS = 500000  # au-dela : figure trop lourde pour le JSON -> fallback
 _MS_PER_DAY = 86400000.0  # largeur de barre sur axe date : jours -> millisecondes
@@ -110,6 +114,40 @@ def _finite_list(values):
         else:
             out.append(None)
     return out
+
+
+
+def _color_at(colors, index=0, default="rgba(0,0,0,0.25)"):
+    try:
+        if colors is None or len(colors) == 0:
+            return default
+        return _hex(colors[min(index, len(colors) - 1)])
+    except Exception:
+        return default
+
+
+def _number_at(values, index=0, default=0.0):
+    try:
+        if values is None or len(values) == 0:
+            return default
+        return float(values[min(index, len(values) - 1)])
+    except Exception:
+        return default
+
+
+def _axis_value(value, is_date=False):
+    if is_date:
+        arr = _as_float_array([value])
+        if arr.size == 0 or not np.isfinite(arr[0]):
+            return None
+        return _dates_to_iso([float(arr[0])])[0]
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value):
+        return None
+    return value
 
 
 def _as_float_array(values):
@@ -246,6 +284,226 @@ def _convert_line(line, axis_suffix):
     else:
         trace["showlegend"] = False
     return trace, x.size
+
+
+
+def _errorbar_parts(container):
+    try:
+        data_line, caplines, barlinecols = container.lines
+    except Exception:
+        return None, (), ()
+    return data_line, tuple(caplines or ()), tuple(barlinecols or ())
+
+
+def _collection_line_color(collections, default="rgba(68,68,68,1.000)"):
+    for collection in collections:
+        try:
+            colors = collection.get_colors()
+        except Exception:
+            colors = None
+        color = _color_at(colors, default=None)
+        if color is not None:
+            return color
+    return default
+
+
+def _points_from_errorbar_collections(barlinecols):
+    xs = []
+    ys = []
+    seen = set()
+    for collection in barlinecols:
+        try:
+            segments = collection.get_segments()
+        except Exception:
+            continue
+        for segment in segments:
+            segment = np.asarray(segment, dtype=float)
+            if segment.shape[0] < 2:
+                continue
+            x0, y0 = segment[0]
+            x1, y1 = segment[-1]
+            if not np.all(np.isfinite([x0, y0, x1, y1])):
+                continue
+            x = 0.5 * (x0 + x1)
+            y = 0.5 * (y0 + y1)
+            key = (round(float(x), 12), round(float(y), 12))
+            if key in seen:
+                continue
+            seen.add(key)
+            xs.append(float(x))
+            ys.append(float(y))
+    if len(xs) == 0:
+        return None, None
+    return np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
+
+
+def _nearest_point_index(x, y, px, py):
+    valid = np.isfinite(x) & np.isfinite(y)
+    if not np.any(valid):
+        return None
+    xv = x[valid]
+    yv = y[valid]
+    xscale = np.nanmax(np.abs(xv)) or 1.0
+    yscale = np.nanmax(np.abs(yv)) or 1.0
+    dist = ((xv - px) / xscale) ** 2 + ((yv - py) / yscale) ** 2
+    local = int(np.nanargmin(dist))
+    return int(np.flatnonzero(valid)[local])
+
+
+def _error_arrays_from_segments(barlinecols, x, y):
+    plus_x = np.zeros(x.shape, dtype=float)
+    minus_x = np.zeros(x.shape, dtype=float)
+    plus_y = np.zeros(y.shape, dtype=float)
+    minus_y = np.zeros(y.shape, dtype=float)
+    has_x = False
+    has_y = False
+
+    for collection in barlinecols:
+        try:
+            segments = collection.get_segments()
+        except Exception:
+            continue
+        for segment in segments:
+            segment = np.asarray(segment, dtype=float)
+            if segment.shape[0] < 2:
+                continue
+            x0, y0 = segment[0]
+            x1, y1 = segment[-1]
+            if not np.all(np.isfinite([x0, y0, x1, y1])):
+                continue
+            vertical = np.isclose(x0, x1, rtol=1e-9, atol=1e-12)
+            horizontal = np.isclose(y0, y1, rtol=1e-9, atol=1e-12)
+            if vertical == horizontal:
+                continue
+            idx = _nearest_point_index(x, y, 0.5 * (x0 + x1), 0.5 * (y0 + y1))
+            if idx is None:
+                continue
+            if vertical:
+                lo, hi = sorted((y0, y1))
+                plus_y[idx] = max(plus_y[idx], max(0.0, hi - y[idx]))
+                minus_y[idx] = max(minus_y[idx], max(0.0, y[idx] - lo))
+                has_y = True
+            else:
+                lo, hi = sorted((x0, x1))
+                plus_x[idx] = max(plus_x[idx], max(0.0, hi - x[idx]))
+                minus_x[idx] = max(minus_x[idx], max(0.0, x[idx] - lo))
+                has_x = True
+
+    return (
+        (plus_x, minus_x) if has_x else None,
+        (plus_y, minus_y) if has_y else None,
+    )
+
+
+def _plotly_error_dict(values, color, cap_width):
+    if values is None:
+        return None
+    plus, minus = values
+    if not (np.any(plus > 0) or np.any(minus > 0)):
+        return None
+    return {
+        "type": "data",
+        "symmetric": False,
+        "array": [float(v) if np.isfinite(v) else 0.0 for v in plus],
+        "arrayminus": [float(v) if np.isfinite(v) else 0.0 for v in minus],
+        "visible": True,
+        "color": color,
+        "thickness": 1,
+        "width": cap_width,
+    }
+
+
+def _convert_errorbar(container, axis_suffix):
+    data_line, caplines, barlinecols = _errorbar_parts(container)
+    cap_width = 4 if len(caplines) > 0 else 0
+
+    if data_line is not None:
+        trace, n_points = _convert_line(data_line, axis_suffix)
+        if trace is None:
+            return None, 0
+        x = _as_float_array(data_line.get_xdata())
+        y = _as_float_array(data_line.get_ydata())
+        color = _hex(data_line.get_color())
+    else:
+        x, y = _points_from_errorbar_collections(barlinecols)
+        if x is None or y is None:
+            return None, 0
+        color = _collection_line_color(barlinecols)
+        n_points = x.size
+        trace = {
+            "type": "scatter",
+            "mode": "markers",
+            "x": _finite_list(x),
+            "y": _finite_list(y),
+            "xaxis": "x" + axis_suffix,
+            "yaxis": "y" + axis_suffix,
+            "marker": {"color": "rgba(0,0,0,0)", "size": 1},
+            "showlegend": False,
+        }
+
+    err_x, err_y = _error_arrays_from_segments(barlinecols, x, y)
+    plotly_err_x = _plotly_error_dict(err_x, color, cap_width)
+    plotly_err_y = _plotly_error_dict(err_y, color, cap_width)
+    if plotly_err_x is not None:
+        trace["error_x"] = plotly_err_x
+    if plotly_err_y is not None:
+        trace["error_y"] = plotly_err_y
+    if plotly_err_x is None and plotly_err_y is None:
+        return None, 0
+
+    label = container.get_label() if hasattr(container, "get_label") else None
+    if _label_ok(label):
+        trace["name"] = label
+        trace["showlegend"] = True
+    return trace, n_points
+
+
+def _convert_poly_collection(collection, axis_suffix):
+    try:
+        paths = list(collection.get_paths())
+    except Exception:
+        return None, 0
+    if len(paths) == 0:
+        return [], 0
+
+    facecolors = collection.get_facecolors()
+    edgecolors = collection.get_edgecolors()
+    linewidths = collection.get_linewidths()
+    label = collection.get_label()
+    traces = []
+    total_points = 0
+
+    for index, path in enumerate(paths):
+        vertices = np.asarray(path.vertices, dtype=float)
+        if vertices.ndim != 2 or vertices.shape[0] < 3 or vertices.shape[1] < 2:
+            continue
+        x = vertices[:, 0]
+        y = vertices[:, 1]
+        total_points += x.size
+        fill_color = _color_at(facecolors, index, "rgba(31,119,180,0.250)")
+        line_color = _color_at(edgecolors, index, fill_color)
+        trace = {
+            "type": "scatter",
+            "mode": "lines",
+            "x": _finite_list(x),
+            "y": _finite_list(y),
+            "fill": "toself",
+            "fillcolor": fill_color,
+            "line": {
+                "color": line_color,
+                "width": _number_at(linewidths, index, 0.0),
+            },
+            "hoveron": "points+fills",
+            "xaxis": "x" + axis_suffix,
+            "yaxis": "y" + axis_suffix,
+            "showlegend": False,
+        }
+        if index == 0 and _label_ok(label):
+            trace["name"] = label
+            trace["showlegend"] = True
+        traces.append(trace)
+
+    return traces, total_points
 
 
 def _convert_scatter(collection, axis_suffix):
@@ -408,18 +666,224 @@ def _convert_quadmesh(mesh, axis_suffix):
     return trace, int(z.size)
 
 
+
+def _coord_kind(coord, ax):
+    try:
+        if coord == ax.transData:
+            return "data"
+        if coord == ax.transAxes:
+            return "axes_fraction"
+    except Exception:
+        pass
+    if isinstance(coord, str):
+        lowered = coord.lower()
+        if lowered == "data":
+            return "data"
+        if lowered == "axes fraction":
+            return "axes_fraction"
+        if lowered == "figure fraction":
+            return "paper"
+        if lowered == "offset points":
+            return "offset_points"
+        if lowered == "offset pixels":
+            return "offset_pixels"
+    return "data"
+
+
+def _coord_pair_to_plotly(ax, coords, point, xref, yref, position, x_is_date, y_is_date):
+    try:
+        px, py = point
+    except Exception:
+        return None
+
+    if isinstance(coords, tuple) and len(coords) == 2:
+        kind_x = _coord_kind(coords[0], ax)
+        kind_y = _coord_kind(coords[1], ax)
+    else:
+        kind_x = kind_y = _coord_kind(coords, ax)
+
+    if kind_x.startswith("offset") or kind_y.startswith("offset"):
+        try:
+            x = float(px)
+            y = float(py)
+        except (TypeError, ValueError):
+            return None
+        if kind_x == "offset_points":
+            x *= 96.0 / 72.0
+        if kind_y == "offset_points":
+            y *= 96.0 / 72.0
+        return {"kind": "offset", "x": x, "y": -y}
+
+    def value_for_axis(value, kind, axis_ref, is_date, lo, hi):
+        if kind == "axes_fraction":
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None, None
+            return lo + value * (hi - lo), "paper"
+        if kind == "paper":
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None, None
+            return value, "paper"
+        return _axis_value(value, is_date), axis_ref
+
+    x, out_xref = value_for_axis(px, kind_x, xref, x_is_date, position.x0, position.x1)
+    y, out_yref = value_for_axis(py, kind_y, yref, y_is_date, position.y0, position.y1)
+    if x is None or y is None:
+        return None
+    return {"kind": "position", "x": x, "y": y, "xref": out_xref, "yref": out_yref}
+
+
+def _base_text_annotation(text):
+    annotation = {
+        "text": text.get_text(),
+        "showarrow": False,
+        "font": {},
+    }
+    try:
+        annotation["font"]["size"] = float(text.get_fontsize())
+    except Exception:
+        pass
+    try:
+        annotation["font"]["color"] = _hex(text.get_color())
+    except Exception:
+        pass
+    if len(annotation["font"]) == 0:
+        annotation.pop("font")
+
+    halign = getattr(text, "get_horizontalalignment", lambda: "center")()
+    valign = getattr(text, "get_verticalalignment", lambda: "center")()
+    if halign in ("left", "center", "right"):
+        annotation["xanchor"] = halign
+    yanchors = {
+        "top": "top",
+        "center": "middle",
+        "center_baseline": "middle",
+        "bottom": "bottom",
+        "baseline": "bottom",
+    }
+    annotation["yanchor"] = yanchors.get(valign, "middle")
+
+    try:
+        rotation = text.get_rotation()
+        if rotation == "vertical":
+            angle = 90.0
+        elif rotation == "horizontal":
+            angle = 0.0
+        else:
+            angle = float(rotation)
+        if angle != 0:
+            annotation["textangle"] = angle
+    except Exception:
+        pass
+
+    try:
+        alpha = text.get_alpha()
+        if alpha is not None:
+            annotation["opacity"] = float(alpha)
+    except Exception:
+        pass
+    return annotation
+
+
+def _append_plotly_texts(layout, ax, xref, yref, position, x_is_date, y_is_date):
+    for text in getattr(ax, "texts", []):
+        try:
+            label = text.get_text()
+        except Exception:
+            label = ""
+        if not label:
+            continue
+
+        annotation = _base_text_annotation(text)
+        if isinstance(text, Annotation):
+            arrow_patch = getattr(text, "arrow_patch", None)
+            xy = getattr(text, "xy", None)
+            xycoords = getattr(text, "xycoords", "data")
+            xyann = getattr(text, "xyann", None)
+            if xyann is None:
+                try:
+                    xyann = text.get_position()
+                except Exception:
+                    xyann = xy
+            anncoords = getattr(text, "anncoords", xycoords)
+
+            if arrow_patch is not None and xy is not None:
+                head = _coord_pair_to_plotly(ax, xycoords, xy, xref, yref, position, x_is_date, y_is_date)
+                if head is None or head.get("kind") != "position":
+                    continue
+                annotation.update({
+                    "x": head["x"],
+                    "y": head["y"],
+                    "xref": head["xref"],
+                    "yref": head["yref"],
+                    "showarrow": True,
+                    "arrowhead": 2,
+                    "arrowsize": 1,
+                    "arrowwidth": 1,
+                })
+                try:
+                    annotation["arrowcolor"] = _hex(arrow_patch.get_edgecolor())
+                except Exception:
+                    pass
+                tail = _coord_pair_to_plotly(ax, anncoords, xyann, xref, yref, position, x_is_date, y_is_date)
+                if (
+                    tail is not None
+                    and tail.get("kind") == "position"
+                    and tail.get("xref") == head.get("xref")
+                    and tail.get("yref") == head.get("yref")
+                ):
+                    annotation["axref"] = tail["xref"]
+                    annotation["ayref"] = tail["yref"]
+                    annotation["ax"] = tail["x"]
+                    annotation["ay"] = tail["y"]
+                elif tail is not None and tail.get("kind") == "offset":
+                    annotation["ax"] = tail["x"]
+                    annotation["ay"] = tail["y"]
+                layout["annotations"].append(annotation)
+                continue
+
+            position_info = _coord_pair_to_plotly(ax, anncoords, xyann, xref, yref, position, x_is_date, y_is_date)
+        else:
+            try:
+                text_position = text.get_position()
+            except Exception:
+                continue
+            position_info = _coord_pair_to_plotly(
+                ax, text.get_transform(), text_position, xref, yref, position, x_is_date, y_is_date
+            )
+
+        if position_info is None or position_info.get("kind") != "position":
+            continue
+        annotation.update({
+            "x": position_info["x"],
+            "y": position_info["y"],
+            "xref": position_info["xref"],
+            "yref": position_info["yref"],
+            "showarrow": False,
+        })
+        layout["annotations"].append(annotation)
+
+
 # ------------------------------------------------------------
 # Detection des artistes non supportes (-> fallback SVG)
 # ------------------------------------------------------------
-def _has_unsupported_artist(ax, bar_rectangles):
+def _has_unsupported_artist(ax, bar_rectangles, supported_collections=None, supported_patches=None):
     from matplotlib.collections import Collection
     from matplotlib.patches import Patch
     from matplotlib.spines import Spine
 
+    supported_collections = supported_collections or set()
+    supported_patches = supported_patches or set()
+
     for child in ax.get_children():
         if isinstance(child, Spine):
             continue  # bordures des axes : ignorables (heritent de Patch)
-        if isinstance(child, (Line2D, PathCollection, QuadMesh, AxesImage)):
+        if child in supported_collections or child in supported_patches:
+            continue
+        if isinstance(child, (Line2D, PathCollection, QuadMesh, PolyCollection, AxesImage)):
             continue
         if isinstance(child, Rectangle):
             if child in bar_rectangles:
@@ -428,9 +892,8 @@ def _has_unsupported_artist(ax, bar_rectangles):
             if child is ax.patch:
                 continue
             return True
-        # Toute autre Collection (LineCollection/PolyCollection de fill_between
-        # et errorbar, ContourSet de contour/contourf, EventCollection...)
-        # n'est pas convertie -> fallback SVG.
+        # Toute autre Collection (ContourSet de contour/contourf,
+        # EventCollection...) n'est pas convertie -> fallback SVG.
         if isinstance(child, Collection):
             return True
         if isinstance(child, Patch):
@@ -541,40 +1004,69 @@ def convert_figure(fig):
         axis_y = "yaxis" + suffix
         axis_trace_start = len(data)
 
-        # rectangles appartenant a des barres (pour la detection)
+        # rectangles/barres d'erreur/textes appartenant a des artistes geres
+        # (pour eviter un fallback SVG juste a cause de leurs sous-artistes).
         bar_rectangles = set()
+        errorbar_containers = []
+        errorbar_lines = set()
+        errorbar_collections = set()
+        text_arrow_patches = set()
         for container in ax.containers:
             if isinstance(container, BarContainer):
                 for p in container.patches:
                     bar_rectangles.add(p)
+            elif isinstance(container, ErrorbarContainer):
+                errorbar_containers.append(container)
+                data_line, caplines, barlinecols = _errorbar_parts(container)
+                if data_line is not None:
+                    errorbar_lines.add(data_line)
+                errorbar_lines.update(caplines)
+                errorbar_collections.update(barlinecols)
+        for text in getattr(ax, "texts", []):
+            arrow_patch = getattr(text, "arrow_patch", None)
+            if arrow_patch is not None:
+                text_arrow_patches.add(arrow_patch)
 
-        if _has_unsupported_artist(ax, bar_rectangles):
-            return None
-
-        # text()/annotate() utilisateur ne sont pas convertis en Plotly :
-        # pour ne pas les perdre silencieusement, on retombe sur le SVG.
-        if len(ax.texts) > 0:
+        if _has_unsupported_artist(ax, bar_rectangles, errorbar_collections, text_arrow_patches):
             return None
 
         # ---- traces ----
+        for container in errorbar_containers:
+            trace, n = _convert_errorbar(container, suffix)
+            if trace is None:
+                return None
+            data.append(trace)
+            total_points += n
+
         for line in ax.get_lines():
+            if line in errorbar_lines:
+                continue
             trace, n = _convert_line(line, suffix)
             if trace is not None:
                 data.append(trace)
                 total_points += n
 
         for child in ax.get_children():
+            if child in errorbar_collections:
+                continue
+            traces = None
+            n = 0
             if isinstance(child, PathCollection):
                 trace, n = _convert_scatter(child, suffix)
+                traces = [trace] if trace is not None else None
             elif isinstance(child, QuadMesh):
                 trace, n = _convert_quadmesh(child, suffix)
+                traces = [trace] if trace is not None else None
             elif isinstance(child, AxesImage):
                 trace, n = _convert_image(child, suffix)
+                traces = [trace] if trace is not None else None
+            elif isinstance(child, PolyCollection):
+                traces, n = _convert_poly_collection(child, suffix)
             else:
                 continue
-            if trace is None:
+            if traces is None:
                 return None
-            data.append(trace)
+            data.extend(traces)
             total_points += n
 
         for container in ax.containers:
@@ -595,6 +1087,12 @@ def convert_figure(fig):
                 trace["x"] = _dates_to_iso(trace["x"])
             if y_is_date and "y" in trace:
                 trace["y"] = _dates_to_iso(trace["y"])
+            if x_is_date and "error_x" in trace:
+                for key in ("array", "arrayminus"):
+                    trace["error_x"][key] = [v * _MS_PER_DAY for v in trace["error_x"].get(key, [])]
+            if y_is_date and "error_y" in trace:
+                for key in ("array", "arrayminus"):
+                    trace["error_y"][key] = [v * _MS_PER_DAY for v in trace["error_y"].get(key, [])]
             # Sur un axe date, Plotly attend la largeur des barres en
             # millisecondes (matplotlib la donne en jours).
             if trace.get("type") == "bar" and "width" in trace:
@@ -604,6 +1102,7 @@ def convert_figure(fig):
 
         # legende (valable pour l'axe hote comme pour un axe twin)
         _apply_legend(layout, ax)
+        position = ax.get_position()
 
         # ---- twinx : l'axe secondaire reutilise le X de l'hote ----
         if is_twin:
@@ -634,6 +1133,7 @@ def convert_figure(fig):
                 layout[axis_y].pop("tickvals", None)
                 layout[axis_y].pop("ticktext", None)
                 layout[axis_y].pop("range", None)
+            _append_plotly_texts(layout, ax, "x" + host_suffix, "y" + suffix, position, x_is_date, y_is_date)
             continue  # pas de bloc axe X / domaine / titre pour un twin
 
         # ---- axes : domaine, labels, echelle, limites, grille ----
@@ -694,6 +1194,8 @@ def convert_figure(fig):
             layout[axis_y].pop("tickvals", None)
             layout[axis_y].pop("ticktext", None)
             layout[axis_y].pop("range", None)
+
+        _append_plotly_texts(layout, ax, "x" + suffix, "y" + suffix, position, x_is_date, y_is_date)
 
         # titre de l'axe -> annotation au-dessus du sous-graphe
         title = ax.get_title()

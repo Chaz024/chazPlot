@@ -38,16 +38,38 @@ class ConvertBaseTests(unittest.TestCase):
         bars = [t for t in spec["data"] if t["type"] == "bar"]
         self.assertTrue(bars and bars[0]["orientation"] == "h")
 
-    def test_unsupported_fill_between_returns_none(self):
+    def test_fill_between_becomes_filled_scatter(self):
         fig, ax = plt.subplots()
-        ax.fill_between([0, 1, 2], [0, 1, 0])
-        self.assertIsNone(convert_figure(fig))
+        ax.plot([0, 1, 2], [0, 1, 0])
+        ax.fill_between([0, 1, 2], [0, 1, 0], alpha=0.25, label="area")
+        spec = convert_figure(fig)
+        self.assertIsNotNone(spec)
+        fills = [t for t in spec["data"] if t.get("fill") == "toself"]
+        self.assertTrue(fills)
+        self.assertEqual(fills[0]["name"], "area")
 
-    def test_unsupported_text_returns_none(self):
+    def test_errorbar_becomes_plotly_error_y(self):
+        fig, ax = plt.subplots()
+        ax.errorbar([0, 1, 2], [1, 2, 1], yerr=[0.1, 0.2, 0.3], fmt="o", label="measure")
+        spec = convert_figure(fig)
+        self.assertIsNotNone(spec)
+        trace = spec["data"][0]
+        self.assertIn("error_y", trace)
+        self.assertEqual(trace["name"], "measure")
+        for actual, expected in zip(trace["error_y"]["array"], [0.1, 0.2, 0.3]):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_text_and_annotate_become_plotly_annotations(self):
         fig, ax = plt.subplots()
         ax.plot([0, 1], [0, 1])
         ax.text(0.5, 0.5, "note")
-        self.assertIsNone(convert_figure(fig))
+        ax.annotate("peak", xy=(1, 1), xytext=(0.7, 0.9), arrowprops={"arrowstyle": "->"})
+        spec = convert_figure(fig)
+        self.assertIsNotNone(spec)
+        annotations = {a["text"]: a for a in spec["layout"]["annotations"]}
+        self.assertIn("note", annotations)
+        self.assertIn("peak", annotations)
+        self.assertTrue(annotations["peak"]["showarrow"])
 
     def test_two_subplots_two_axis_pairs(self):
         fig, (ax1, ax2) = plt.subplots(1, 2)

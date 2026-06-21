@@ -23,11 +23,13 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
   barre de navigation, vitesse 0.25×–4×.
 - **Agrandir** : overlay plein panneau qui re-rend en vectoriel (net à toute
   taille), avec redimensionnement automatique.
+- **Zoom encarté** : sélectionnez une zone et affichez-la en encart sur
+  le graphe original, en plus du zoom Plotly standard.
 - **Copier** : met l'image de la figure dans le presse-papiers (collable dans
   Word, un mail, un chat…).
 - **Enregistrer / Tout enregistrer** (PNG ou SVG), **Supprimer / Tout
-  supprimer**.
-- **Export LaTeX (PGF/TikZ)** : copie ou enregistre le code de la figure.
+  supprimer**. Les images exportées peuvent être incluses dans LaTeX/Overleaf
+  avec `\includegraphics`.
 - **Comparaison** : sélection de plusieurs graphes pour les superposer.
   - **Erreur entre courbes** : en superposition, bouton « Erreur » pour tracer
     l'écart de N courbes par rapport à une référence choisie (différence signée,
@@ -92,9 +94,10 @@ plt.show()                      # lecteur d'animation dans le panneau
 
 ## Limites connues
 
-- **Artistes non gérés → rendu SVG** (net mais non interactif) : `fill_between`,
-  `errorbar`, `contour`/`contourf`, `quiver`/`streamplot`, axes polaires, 3D,
-  `pie`, et toute figure contenant des `text()`/`annotate()`.
+- **Interactif Plotly** : lignes, scatter, barres, heatmaps, `pcolormesh`,
+  `fill_between`, `errorbar`, `text()`/`annotate()`, subplots simples et `twinx`.
+- **Artistes non gérés → rendu SVG/PNG** : `contour`/`contourf`,
+  `quiver`/`streamplot`, axes polaires, 3D, `pie`, et patches libres complexes.
 - **boxplot** : converti en lignes (`Line2D`) ; utilisez
   `plt.boxplot(..., patch_artist=True)` pour un meilleur rendu.
 - **Légende** : la position suit le `loc` matplotlib ; `bbox_to_anchor`
