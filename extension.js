@@ -381,36 +381,24 @@ async function saveOne(id, frameIndex) {
   if (fig.plotly && !fig.frames) {
     const options = await plotlyExportOptions(fig);
     if (!options) { return; }
-    // PDF : ecriture directe du rendu matplotlib, sans passer par le webview.
-    if (options.format === "pdf") {
-      const uri = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.file(path.join(workspaceDir(), defaultName(fig, "pdf"))),
-        filters: { "PDF (vectoriel)": ["pdf"] }
-      });
-      if (!uri) { return; }
-      try {
-        fs.writeFileSync(uri.fsPath, Buffer.from(fig.pdf, "base64"));
-        vscode.window.showInformationMessage("Figure enregistree : " + uri.fsPath);
-      } catch (err) {
-        vscode.window.showErrorMessage("Chaz Plots : echec de l'enregistrement PDF (" + String(err) + ")");
-      }
-      return;
-    }
+    const isPdf = options.format === "pdf";
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(workspaceDir(), defaultName(fig, options.format))),
-      filters: options.format === "svg"
-        ? { "Image SVG (vectoriel)": ["svg"] }
-        : { "Image PNG": ["png"] }
+      filters: isPdf
+        ? { "PDF": ["pdf"] }
+        : (options.format === "svg"
+            ? { "Image SVG (vectoriel)": ["svg"] }
+            : { "Image PNG": ["png"] })
     });
     if (!uri) { return; }
     const requestId = String(nextExportRequestId++);
-    pendingExports[requestId] = { filePath: uri.fsPath, title: fig.title };
-    postToWebview({
-      type: "exportPlotly",
-      id: fig.id,
-      requestId: requestId,
-      options: options
-    });
+    pendingExports[requestId] = {
+      filePath: uri.fsPath,
+      title: fig.title,
+      // Repli si le webview renvoie useNative (figure sans encart) : PDF matplotlib.
+      nativePdf: (isPdf && fig.pdf) ? fig.pdf : null
+    };
+    postToWebview({ type: "exportPlotly", id: fig.id, requestId: requestId, options: options });
     return;
   }
 
@@ -443,7 +431,13 @@ function finishPlotlyExport(msg) {
     return;
   }
   try {
-    writeDataUrl(request.filePath, msg.dataUrl);
+    if (msg.useNative) {
+      // Figure sans encart : on ecrit le PDF matplotlib natif (vectoriel).
+      if (!request.nativePdf) { throw new Error("PDF natif indisponible"); }
+      fs.writeFileSync(request.filePath, Buffer.from(request.nativePdf, "base64"));
+    } else {
+      writeDataUrl(request.filePath, msg.dataUrl);
+    }
     vscode.window.showInformationMessage("Figure exportee : " + request.filePath);
   } catch (err) {
     vscode.window.showErrorMessage("Chaz Plots : echec de l'ecriture de l'export (" + String(err) + ")");
