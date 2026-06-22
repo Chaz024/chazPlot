@@ -2461,29 +2461,133 @@
   // ----------------------------------------------------------
   // Export avance Plotly
   // ----------------------------------------------------------
-  function postExportResult(requestId, ok, dataUrl, error){
+  function postExportResult(requestId, ok, dataUrl, error, useNative){
     vscodeApi.postMessage({
       type: "exportResult",
       requestId: requestId,
       ok: ok,
       dataUrl: dataUrl || null,
-      error: error || null
+      error: error || null,
+      useNative: !!useNative
     });
   }
 
+  // Charge un data URL image dans un <canvas> et renvoie ses pixels RGBA.
+  function pixelsFromImageUrl(url){
+    return new Promise(function(resolve, reject){
+      const im = new Image();
+      im.onload = function(){
+        const cv = document.createElement("canvas");
+        cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+        const ctx = cv.getContext("2d");
+        ctx.drawImage(im, 0, 0);
+        resolve({ data: ctx.getImageData(0, 0, cv.width, cv.height).data,
+                  width: cv.width, height: cv.height });
+      };
+      im.onerror = function(){ reject(new Error("image illisible")); };
+      im.src = url;
+    });
+  }
+
+  // RGBA (premultiplie sur blanc) -> RGB compact, pour un flux image PDF.
+  function rgbaToRgbOnWhite(rgba){
+    const n = rgba.length / 4;
+    const out = new Uint8Array(n * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3){
+      const a = rgba[i + 3] / 255;
+      out[j]     = Math.round(rgba[i]     * a + 255 * (1 - a));
+      out[j + 1] = Math.round(rgba[i + 1] * a + 255 * (1 - a));
+      out[j + 2] = Math.round(rgba[i + 2] * a + 255 * (1 - a));
+    }
+    return out;
+  }
+
+  // Compresse en zlib (FlateDecode) via l'API plateforme CompressionStream.
+  function deflateZlib(bytes){
+    const cs = new CompressionStream("deflate");   // "deflate" = zlib (RFC1950)
+    const writer = cs.writable.getWriter();
+    writer.write(bytes); writer.close();
+    return new Response(cs.readable).arrayBuffer().then(function(buf){
+      return new Uint8Array(buf);
+    });
+  }
+
+  // Extrait les octets bruts d'un data URL base64 (ex. JPEG).
+  function bytesFromBase64DataUrl(url){
+    const b64 = url.slice(url.indexOf(",") + 1);
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++){ out[i] = bin.charCodeAt(i); }
+    return out;
+  }
+
+  function bytesToPdfDataUrl(bytes){
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++){ bin += String.fromCharCode(bytes[i]); }
+    return "data:application/pdf;base64," + btoa(bin);
+  }
+
+  // Construit un data URL PDF raster a partir d'un element Plotly vivant
+  // (inclut encart / sous-graphe d'erreur / superposition). FlateDecode
+  // (sans perte) si CompressionStream dispo, sinon repli JPEG/DCTDecode.
+  function buildRasterPdfDataUrl(el){
+    const cssW = Math.max(1, Math.round(el.clientWidth ||
+      (el.parentElement && el.parentElement.clientWidth) || 900));
+    const cssH = Math.max(1, Math.round(el.clientHeight || 540));
+    const pageW = Number((cssW * 0.75).toFixed(2));   // px CSS @96dpi -> points
+    const pageH = Number((cssH * 0.75).toFixed(2));
+    const SCALE = 3;
+    if (typeof CompressionStream !== "undefined"){
+      return Plotly.toImage(el, { format: "png", width: cssW, height: cssH, scale: SCALE })
+        .then(pixelsFromImageUrl)
+        .then(function(px){
+          const rgb = rgbaToRgbOnWhite(px.data);
+          return deflateZlib(rgb).then(function(deflated){
+            return bytesToPdfDataUrl(PdfExport.buildPdf({
+              imageBytes: deflated, pixelWidth: px.width, pixelHeight: px.height,
+              pageWidth: pageW, pageHeight: pageH, filter: "FlateDecode", colorComponents: 3
+            }));
+          });
+        });
+    }
+    return Plotly.toImage(el, { format: "jpeg", width: cssW, height: cssH, scale: SCALE })
+      .then(function(url){
+        return pixelsFromImageUrl(url).then(function(px){
+          return bytesToPdfDataUrl(PdfExport.buildPdf({
+            imageBytes: bytesFromBase64DataUrl(url), pixelWidth: px.width, pixelHeight: px.height,
+            pageWidth: pageW, pageHeight: pageH, filter: "DCTDecode", colorComponents: 3
+          }));
+        });
+      });
+  }
+
   function exportPlotly(msg){
-    const fig = figStore[msg.id];
-    const el = document.getElementById("plot-" + msg.id);
-    if (!fig || !fig.plotly || !el || typeof Plotly === "undefined" || !Plotly.toImage){
+    const isCompare = msg.id === "compare";
+    const el = isCompare ? currentComparePlotEl() : document.getElementById("plot-" + msg.id);
+    const fig = isCompare ? null : figStore[msg.id];
+    if (!el || typeof Plotly === "undefined" || !Plotly.toImage){
       postExportResult(msg.requestId, false, null, "plot introuvable ou Plotly.toImage indisponible");
       return;
     }
-
     const options = msg.options || {};
+
+    // PDF : figure sans encart et hors comparaison -> PDF matplotlib natif
+    // (signal useNative). Sinon -> PDF raster genere ici (encart/erreurs inclus).
+    if (options.format === "pdf"){
+      if (!isCompare && !el._spHasInset){
+        postExportResult(msg.requestId, true, null, null, true);
+        return;
+      }
+      buildRasterPdfDataUrl(el)
+        .then(function(dataUrl){ postExportResult(msg.requestId, true, dataUrl, null); })
+        .catch(function(err){ postExportResult(msg.requestId, false, null, String(err)); });
+      return;
+    }
+
     const format = options.format === "svg" ? "svg" : "png";
     const scale = Math.max(0.25, Number(options.scale) || 1);
     const width = Math.max(1, Math.round(el.clientWidth || (el.parentElement && el.parentElement.clientWidth) || 900));
-    const height = Math.max(1, Math.round(el.clientHeight || listPlotHeight(el, fig) || 540));
+    const height = Math.max(1, Math.round(el.clientHeight || listPlotHeight(el, fig || {}) || 540));
     const layout = el.layout || {};
     const previous = {
       paper_bgcolor: layout.paper_bgcolor,
@@ -2493,19 +2597,12 @@
 
     Promise.resolve(Plotly.relayout(el, { paper_bgcolor: bg, plot_bgcolor: bg }))
       .then(function(){
-        return Plotly.toImage(el, {
-          format: format,
-          width: width,
-          height: height,
-          scale: scale
-        });
+        return Plotly.toImage(el, { format: format, width: width, height: height, scale: scale });
       })
       .then(function(dataUrl){
         return Promise.resolve(Plotly.relayout(el, previous)).then(function(){ return dataUrl; });
       })
-      .then(function(dataUrl){
-        postExportResult(msg.requestId, true, dataUrl, null);
-      })
+      .then(function(dataUrl){ postExportResult(msg.requestId, true, dataUrl, null); })
       .catch(function(err){
         try { Plotly.relayout(el, previous); } catch (e) {}
         postExportResult(msg.requestId, false, null, String(err));
