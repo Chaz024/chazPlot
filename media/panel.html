@@ -303,6 +303,7 @@
   .error-panel .error-types input{ accent-color: var(--sp-accent); margin:0; }
   .error-panel select{ margin-left:4px; }
   .error-warn{ color: var(--vscode-charts-yellow, #cca700); font-size:11px; }
+  .error-summary{ font-size:11px; opacity:0.85; }
     .inset-overlay {
       position: absolute; box-sizing: border-box; z-index: 5;
       cursor: move; background: transparent; touch-action: none;
@@ -376,9 +377,7 @@
       <button id="compareBundle" class="compact" title="Exporter un dossier publication">Bundle</button>
     </div>
     <div class="error-panel" id="errorPanel" style="display:none">
-      <label title="Astuce : cliquez une courbe du graphe pour la choisir comme reference">Reference :
-        <select id="errorRef"></select>
-      </label>
+      <span id="errorSummary" class="error-summary">Cliquez une courbe : 1re = référence, suivantes = à comparer.</span>
       <span class="error-types">
         <label><input type="checkbox" class="error-type" value="signed"> Difference signee</label>
         <label><input type="checkbox" class="error-type" value="abs"> Erreur absolue</label>
@@ -386,6 +385,7 @@
         <label><input type="checkbox" class="error-type" value="relpct"> Erreur relative %</label>
       </span>
       <button id="errorApply" class="compact">Appliquer</button>
+      <button id="errorReset" class="compact">Reinitialiser</button>
       <button id="errorHide" class="compact">Masquer</button>
     </div>
     <div class="compare-body" id="compareBody"></div>
@@ -447,11 +447,14 @@
   const compareOpacity = document.getElementById("compareOpacity");
   const errorToggle = document.getElementById("errorToggle");
   const errorPanel = document.getElementById("errorPanel");
-  const errorRef = document.getElementById("errorRef");
   const errorApply = document.getElementById("errorApply");
   const errorHide = document.getElementById("errorHide");
   const errorWarn = document.getElementById("errorWarn");
-  let errorState = { active: false, refKey: null, types: [] };
+  const errorReset = document.getElementById("errorReset");
+  const errorSummary = document.getElementById("errorSummary");
+  let errorState = { active: false, refKey: null, types: [], comparedKeys: [] };
+  // Selection au clic (panneau ouvert, avant Appliquer).
+  let errorSelect = { refKey: null, comparedKeys: [] };
   let compareCurrentTitle = "comparaison";
   const overlay = document.getElementById("overlay");
   const ovBody = document.getElementById("ovBody");
@@ -2056,8 +2059,7 @@
   // Aplati les courbes scatter des figures comparees en une liste
   // { key:"c0","c1"..., label, x[], y[] } pour ErrorMath. Exclut les barres et
   // les lignes de reference verticales (axvline). L'ORDRE fixe les cles c0,c1...
-  // -> rappeler flattenCurves sur le MEME jeu que populateErrorRef pour que
-  // refKey corresponde.
+  // -> rappeler flattenCurves sur le MEME jeu pour que refKey corresponde.
   function flattenCurves(figs){
     const curves = [];
     let idx = 0;
@@ -2087,21 +2089,76 @@
     errorToggle.disabled = !enough;
   }
 
-  function populateErrorRef(curves){
-    errorRef.innerHTML = "";
-    curves.forEach(function(c){
-      const opt = document.createElement("option");
-      opt.value = c.key;
-      opt.textContent = c.letter + " - " + c.name;
-      errorRef.appendChild(opt);
+  function curveLabelByKey(curves, key){
+    const c = curves.filter(function(x){ return x.key === key; })[0];
+    return c ? c.letter : key;
+  }
+
+  function refreshErrorSummary(){
+    const figs = selectedForCompare.map(function(id){ return figStore[id]; }).filter(Boolean);
+    const curves = flattenCurves(figs);
+    if (!errorSelect.refKey){
+      errorSummary.textContent = "Cliquez une courbe : 1re = référence, suivantes = à comparer.";
+      return;
+    }
+    const ref = curveLabelByKey(curves, errorSelect.refKey);
+    const cmp = errorSelect.comparedKeys.map(function(k){ return curveLabelByKey(curves, k); });
+    errorSummary.textContent = "Réf : " + ref +
+      " • Comparées : " + (cmp.length ? cmp.join(", ") : "—");
+  }
+
+  // Met en avant la reference (epaisse) et les comparees (pleine opacite),
+  // attenue le reste. S'appuie sur le tag _curveKey des traces.
+  function highlightErrorSelection(el){
+    if (!el || !el.data){ return; }
+    el.data.forEach(function(tr, i){
+      const key = tr._curveKey;
+      if (key === undefined){ return; }
+      const isRef = key === errorSelect.refKey;
+      const isCmp = errorSelect.comparedKeys.indexOf(key) !== -1;
+      const opacity = (isRef || isCmp) ? 1 : 0.25;
+      const width = isRef ? 3.5 : ((tr.line && tr.line.width) || 2);
+      Plotly.restyle(el, { opacity: opacity, "line.width": width }, [i]);
     });
-    if (curves.length){ errorRef.value = curves[0].key; }
+  }
+
+  // Regle unifiee du clic sur une courbe de cle k.
+  function toggleErrorSelection(key){
+    if (key === errorSelect.refKey){ errorSelect.refKey = null; return; }
+    const idx = errorSelect.comparedKeys.indexOf(key);
+    if (idx !== -1){ errorSelect.comparedKeys.splice(idx, 1); return; }
+    if (!errorSelect.refKey){ errorSelect.refKey = key; return; }
+    errorSelect.comparedKeys.push(key);
+  }
+
+  function bindSelectionClick(el){
+    if (!el || !el.on){ return; }
+    el.on("plotly_click", function(ev){
+      if (errorPanel.style.display === "none"){ return; }  // selection seulement panneau ouvert
+      const pt = ev && ev.points && ev.points[0];
+      const key = pt && pt.data && pt.data._curveKey;
+      if (key === undefined || key === null){ return; }
+      toggleErrorSelection(key);
+      refreshErrorSummary();
+      highlightErrorSelection(el);
+    });
   }
 
   function openErrorPanel(){
     const figs = selectedForCompare.map(function(id){ return figStore[id]; }).filter(Boolean);
-    populateErrorRef(flattenCurves(figs));
+    // Repart de la superposition simple pour selectionner au clic.
+    const el = currentComparePlotEl();
+    if (el){
+      errorState = { active: false, refKey: null, types: [], comparedKeys: [] };
+      errorSelect = { refKey: null, comparedKeys: [] };
+      const merged = mergedPlotlyFigure(figs);
+      Plotly.purge(el);
+      renderPlotly(el, merged, true, null);
+      Plotly.Plots.resize(el);
+      bindSelectionClick(el);
+    }
     errorWarn.textContent = "";
+    refreshErrorSummary();
     errorPanel.style.display = "flex";
   }
 
@@ -2131,17 +2188,11 @@
     };
   }
 
-  // Rend la superposition + sous-graphe d'erreur pour une reference donnee, et
-  // (re)branche le clic-sur-courbe qui change la reference. Centralise pour que
-  // l'application initiale (errorApply) et le changement au clic partagent le
-  // meme chemin (le graphe est re-cree a chaque fois -> on rebranche le clic).
-  function applyError(figs, refKey, types){
+  function applyError(figs, refKey, types, comparedKeys){
     const el = currentComparePlotEl();
     if (!el){ return; }
-    errorState = { active: true, refKey: refKey, types: types };
-    const merged = mergedPlotlyFigureWithErrors(figs, refKey, types);
-    // Replie la barre de config AVANT de dimensionner : le graphe (et le
-    // panneau d'erreur) prend toute la hauteur. Bouton « Erreur » pour rouvrir.
+    errorState = { active: true, refKey: refKey, types: types, comparedKeys: comparedKeys };
+    const merged = mergedPlotlyFigureWithErrors(figs, refKey, types, comparedKeys);
     errorPanel.style.display = "none";
     Plotly.purge(el);
     renderPlotly(el, merged, true, null);
@@ -2149,20 +2200,6 @@
     errorWarn.textContent = (merged._ignored && merged._ignored.length)
       ? "Sans recouvrement X, ignorees : " + merged._ignored.join(", ")
       : "";
-    bindRefClick(el, figs);
-  }
-
-  // Clic sur une courbe du panneau du haut -> elle devient la reference.
-  function bindRefClick(el, figs){
-    if (!el || !el.on){ return; }
-    el.on("plotly_click", function(ev){
-      if (!errorState.active){ return; }
-      const pt = ev && ev.points && ev.points[0];
-      const key = pt && pt.data && pt.data._curveKey;
-      if (!key || key === errorState.refKey){ return; }
-      errorRef.value = key;
-      applyError(figs, key, errorState.types);
-    });
   }
 
   errorApply.addEventListener("click", function(){
@@ -2170,16 +2207,26 @@
     const types = Array.prototype.slice
       .call(document.querySelectorAll(".error-type:checked"))
       .map(function(cb){ return cb.value; });
+    if (!errorSelect.refKey){ errorWarn.textContent = "Cliquez une courbe de référence."; return; }
+    if (errorSelect.comparedKeys.length === 0){ errorWarn.textContent = "Cliquez au moins une courbe à comparer."; return; }
     if (types.length === 0){ errorWarn.textContent = "Cochez au moins un type d'erreur."; return; }
     if (!currentComparePlotEl()){ return; }
-    applyError(figs, errorRef.value, types);
+    applyError(figs, errorSelect.refKey, types, errorSelect.comparedKeys.slice());
+  });
+
+  errorReset.addEventListener("click", function(){
+    errorSelect = { refKey: null, comparedKeys: [] };
+    errorWarn.textContent = "";
+    refreshErrorSummary();
+    const el = currentComparePlotEl();
+    if (el){ highlightErrorSelection(el); }
   });
 
   errorHide.addEventListener("click", function(){
     const figs = selectedForCompare.map(function(id){ return figStore[id]; }).filter(Boolean);
     const el = currentComparePlotEl();
     if (!el){ return; }
-    errorState = { active: false, refKey: null, types: [] };
+    errorState = { active: false, refKey: null, types: [], comparedKeys: [] };
     errorWarn.textContent = "";
     const merged = mergedPlotlyFigure(figs);
     errorPanel.style.display = "none";
@@ -2264,11 +2311,14 @@
   // rapport a la reference refKey, pour les types coches (typeIds : signed/abs/
   // rel/relpct ; calcul dans ErrorMath). Le panneau du haut garde (x, y), le
   // bas reutilise x et ajoute yaxis2. Voir openErrorPanel pour l'orchestration.
-  function mergedPlotlyFigureWithErrors(figs, refKey, typeIds){
-    const base = mergedPlotlyFigure(figs);      // superposition sur (x, y)
+  function mergedPlotlyFigureWithErrors(figs, refKey, typeIds, comparedKeys){
+    const base = mergedPlotlyFigure(figs);
     const layout = base.plotly.layout;
     const curves = flattenCurves(figs);
     const ref = curves.filter(function(c){ return c.key === refKey; })[0] || curves[0];
+    const compareSet = (comparedKeys && comparedKeys.length)
+      ? comparedKeys
+      : curves.filter(function(c){ return c.key !== ref.key; }).map(function(c){ return c.key; });
 
     // Vrai sous-graphe empile : x partage, repartition ~45 / 48 (panneau
     // d'erreur agrandi) avec un ecart franc entre les deux panneaux. L'axe X
@@ -2290,11 +2340,10 @@
     const ignored = [];
     curves.forEach(function(c){
       if (c.key === ref.key){ return; }
-      // Compte le nombre de types ayant produit une trace pour cette courbe.
+      if (compareSet.indexOf(c.key) === -1){ return; }   // seulement les courbes choisies
       let produced = 0;
       typeIds.forEach(function(typeId){
         const series = ErrorMath.buildErrorSeries(typeId, ref.x, ref.y, c.x, c.y);
-        // Aucun recouvrement pour ce type : on passe au suivant sans tracer.
         if (series.y.every(function(v){ return v === null; })){ return; }
         const meta = ErrorMath.ERROR_TYPES[typeId];
         data.push({
@@ -2307,7 +2356,6 @@
         });
         produced++;
       });
-      // Une courbe est ignoree uniquement si AUCUN type n'a produit de trace.
       if (produced === 0 && ignored.indexOf(c.letter) === -1){ ignored.push(c.letter); }
     });
     base._ignored = ignored;

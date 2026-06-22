@@ -18,7 +18,7 @@ const requiredIds = [
   "fitToggle", "sortSelect", "saveAll", "deleteAll", "list", "empty", "overlay", "ovTitle",
   "ovCoords", "ovClose", "ovBody", "compareOverlay", "compareTitle",
   "compareOpacityWrap", "compareOpacity", "compareClose", "errorToggle",
-  "errorWarn", "errorPanel", "errorRef", "errorApply", "errorHide", "compareBody",
+  "errorWarn", "errorPanel", "errorApply", "errorHide", "errorReset", "errorSummary", "compareBody",
   "compareSave", "compareCopy", "compareCsv", "compareBundle",
 ];
 
