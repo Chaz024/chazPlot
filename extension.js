@@ -328,7 +328,13 @@ async function plotlyExportOptions(fig) {
   ];
   // PDF disponible : rendu matplotlib natif (fidele, vectoriel) deja recu.
   if (fig && fig.pdf) {
-    choices.push({ label: "PDF", description: "vectoriel matplotlib, ideal publication/LaTeX", value: "pdf" });
+    choices.push({
+      label: "PDF",
+      description: fig.id === "compare"
+        ? "raster haute resolution (comparaison)"
+        : "vectoriel matplotlib, ideal publication/LaTeX",
+      value: "pdf"
+    });
   }
   const formatPick = await vscode.window.showQuickPick(choices, { placeHolder: "Format d'export" });
   if (!formatPick) { return null; }
