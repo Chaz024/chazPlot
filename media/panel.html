@@ -13,6 +13,7 @@
 <script src="{{bundleMetaUri}}"></script>
 <script src="{{figureFilterUri}}"></script>
 <script src="{{pdfExportUri}}"></script>
+<script src="{{legendEditUri}}"></script>
 <style>
   :root{
     color-scheme: light dark;
@@ -180,9 +181,13 @@
   body.no-fit .imgwrap img{ max-width:none; }
   body.no-fit .imgwrap img.vector{ width:auto; }
   body.no-fit .imgwrap{ overflow-x:auto; }
-  .plotwrap{ padding:6px; background: var(--sp-plot-bg); }
+  .plotwrap{ padding:6px; background: var(--sp-plot-bg); width:100%; overflow:hidden; }
+  .plotwrap > div{ max-width:100%; }
+  body.no-fit .plotwrap{ overflow-x:auto; }
+  body.no-fit .plotwrap > div{ max-width:none; }
   .sp-inset-armed{ outline:2px dashed var(--sp-accent); outline-offset:-2px; }
   .sp-measure-armed{ outline:2px dashed #ff5db1; outline-offset:-2px; }
+  .sp-legend-armed{ outline:2px dashed var(--vscode-charts-purple, #b180d7); outline-offset:-2px; }
   /* Panneau de lecture des mesures (dx/dy/pente, aire, stats) */
   .measure-readout{
     font-family: var(--vscode-editor-font-family, monospace);
@@ -195,6 +200,36 @@
   .measure-readout .measure-row{ white-space:nowrap; font-variant-numeric: tabular-nums; }
   .measure-readout .measure-row b{ color:#ff5db1; }
   .measure-readout .measure-hint{ color: var(--sp-text-dim); font-style:italic; }
+
+  .legend-editor{
+    position:fixed; right:16px; bottom:16px; z-index:70;
+    display:none; align-items:flex-end; gap:8px; flex-wrap:wrap;
+    max-width:calc(100vw - 32px); padding:10px;
+    border:1px solid var(--sp-border); border-radius:8px;
+    background: var(--sp-surface); color: var(--sp-text);
+    box-shadow: var(--sp-shadow-2);
+  }
+  .legend-editor label{ display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--sp-text-dim); }
+  .legend-editor input, .legend-editor select{
+    min-width:76px; height:26px; padding:2px 6px;
+    border:1px solid var(--vscode-input-border, var(--sp-border)); border-radius:6px;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    font-family:inherit; font-size:12px;
+  }
+  .legend-editor input[type=color]{ min-width:44px; width:44px; padding:1px 3px; }
+  .legend-editor input[type=number]{ width:64px; min-width:64px; }
+  .legend-editor .le-name{ min-width:150px; }
+  .le-color-tools{ display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
+  .le-swatches{ display:flex; gap:4px; flex-wrap:wrap; max-width:190px; }
+  .le-swatch{
+    width:22px; height:22px; padding:0; min-width:0; border-radius:4px;
+    border:1px solid color-mix(in srgb, var(--sp-border) 70%, #ffffff);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  }
+  .le-swatch:hover{ transform:none; border-color:var(--sp-accent); }
+  .le-advanced{ min-width:230px; color:var(--sp-text); }
+  .le-advanced summary{ cursor:pointer; font-size:11px; color:var(--sp-text-dim); margin-bottom:6px; }
+  .le-advanced-body{ display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
 
   /* ----- Lecteur d'animation ----- */
   .player{ background: var(--sp-plot-bg); }
@@ -388,6 +423,30 @@
       <button id="errorHide" class="compact">Masquer</button>
     </div>
     <div class="compare-body" id="compareBody"></div>
+  </div>
+
+
+  <!-- Editeur d'entree de legende -->
+  <div class="legend-editor" id="legendEditor" role="dialog" aria-label="Edition de legende">
+    <label>Nom <input class="le-name" id="leName" type="text"></label>
+    <div class="le-color-tools">
+      <label>Couleur <input id="leColor" type="color" value="#1f77b4"></label>
+      <div class="le-swatches" id="leBaseColors" aria-label="Couleurs de base"></div>
+    </div>
+    <details class="le-advanced" id="leAdvancedColors">
+      <summary>Avance</summary>
+      <div class="le-advanced-body">
+        <label>Palette <select id="lePalette"></select></label>
+        <div class="le-swatches" id="lePaletteColors" aria-label="Couleurs de palette"></div>
+        <button class="compact" id="leApplyPalette">Appliquer palette</button>
+      </div>
+    </details>
+    <label>Trait <select id="leDash"></select></label>
+    <label>Epaisseur <input id="leWidth" type="number" min="0.2" max="20" step="0.2" value="2"></label>
+    <label>Marqueur <select id="leSymbol"></select></label>
+    <label>Taille <input id="leMarkerSize" type="number" min="1" max="40" step="1" value="6"></label>
+    <button class="compact primary" id="leApply">Appliquer</button>
+    <button class="compact" id="leClose">Fermer</button>
   </div>
 
 <script nonce="{{nonce}}">
@@ -1292,6 +1351,10 @@
       el._spInsetArmed = false;
       setInsetArmedFeedback(el, el._spCoordsEl || null);
     }
+    if (el._spMeasureArmed && el._spLegendEditArmed){
+      el._spLegendEditArmed = false;
+      setLegendEditFeedback(el, el._spCoordsEl || null);
+    }
     setMeasureArmedFeedback(el);
   }
   function measureTrace(points){
@@ -1490,24 +1553,209 @@
     vscodeApi.postMessage({ type: "saveBundle", base: base, files: files });
   }
 
+  // ----------------------------------------------------------
+  // Edition de legende : bouton modebar -> clic entree de legende -> patch.
+  // En vue liste, le patch est persiste via extension.js ; en comparaison il
+  // reste de session.
+  // ----------------------------------------------------------
+  let legendEditTarget = { el: null, idx: -1 };
+
+  function fillLegendSelect(select, options){
+    if (!select || !options){ return; }
+    select.innerHTML = "";
+    options.forEach(function(opt){
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      select.appendChild(o);
+    });
+  }
+
+  function setLegendColor(color){
+    const input = document.getElementById("leColor");
+    if (input && typeof LegendEdit !== "undefined"){
+      input.value = LegendEdit.toHexColor(color, input.value || "#1f77b4");
+    }
+  }
+
+  function renderColorSwatches(container, colors){
+    if (!container || !colors){ return; }
+    container.innerHTML = "";
+    colors.forEach(function(item){
+      const color = typeof item === "string" ? item : item.value;
+      const label = typeof item === "string" ? item : item.label;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "le-swatch";
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      btn.style.background = color;
+      btn.addEventListener("click", function(){ setLegendColor(color); });
+      container.appendChild(btn);
+    });
+  }
+
+  function refreshPaletteSwatches(){
+    if (typeof LegendEdit === "undefined"){ return; }
+    const select = document.getElementById("lePalette");
+    const colors = LegendEdit.paletteColors(select ? select.value : "tab10");
+    renderColorSwatches(document.getElementById("lePaletteColors"), colors);
+  }
+
+  (function initLegendEditor(){
+    if (typeof LegendEdit === "undefined"){ return; }
+    fillLegendSelect(document.getElementById("leDash"), LegendEdit.LINE_DASHES);
+    fillLegendSelect(document.getElementById("leSymbol"), LegendEdit.MARKER_SYMBOLS);
+    fillLegendSelect(document.getElementById("lePalette"), LegendEdit.PALETTES);
+    renderColorSwatches(document.getElementById("leBaseColors"), LegendEdit.BASE_COLORS);
+    refreshPaletteSwatches();
+    const pal = document.getElementById("lePalette");
+    if (pal){ pal.addEventListener("change", refreshPaletteSwatches); }
+  })();
+
+  function closeLegendEditor(){
+    const box = document.getElementById("legendEditor");
+    if (box){ box.style.display = "none"; }
+    legendEditTarget = { el: null, idx: -1 };
+  }
+
+  function openLegendEditor(el, idx){
+    if (!el || !el.data || !el.data[idx] || typeof LegendEdit === "undefined"){ return; }
+    legendEditTarget = { el: el, idx: idx };
+    const v = LegendEdit.readTrace(el.data[idx]);
+    document.getElementById("leName").value = v.name;
+    document.getElementById("leColor").value = LegendEdit.toHexColor(v.color, "#1f77b4");
+    document.getElementById("leDash").value = v.dash;
+    document.getElementById("leWidth").value = String(v.width);
+    document.getElementById("leSymbol").value = v.symbol;
+    document.getElementById("leMarkerSize").value = String(v.markerSize);
+    document.getElementById("legendEditor").style.display = "flex";
+  }
+
+  function setLegendEditFeedback(el, coordsEl){
+    if (el.parentElement){ el.parentElement.classList.toggle("sp-legend-armed", !!el._spLegendEditArmed); }
+    if (coordsEl){ coordsEl.textContent = el._spLegendEditArmed ? "Mode legende : cliquez une entree a editer" : ""; }
+  }
+
+  function persistLegendPatch(el, idx, patch){
+    if (el._spBaseData && el._spBaseData[idx]){ LegendEdit.applyPatch(el._spBaseData[idx], patch); }
+    const m = /^plot-(\d+)$/.exec(el.id || "");
+    if (!m){ return; }
+    const id = parseInt(m[1], 10);
+    const fig = figStore[id];
+    if (fig && fig.plotly && fig.plotly.data && fig.plotly.data[idx]){
+      LegendEdit.applyPatch(fig.plotly.data[idx], patch);
+      vscodeApi.postMessage({ type: "updateFigure", id: id, traceIndex: idx, patch: patch });
+    }
+  }
+
+  function restyleLegendTrace(el, idx, patch){
+    try { Plotly.restyle(el, patch, [idx]); } catch (e) {}
+    persistLegendPatch(el, idx, patch);
+  }
+
+  document.getElementById("leClose").addEventListener("click", closeLegendEditor);
+  document.getElementById("leApply").addEventListener("click", function(){
+    const el = legendEditTarget.el;
+    const idx = legendEditTarget.idx;
+    if (!el || idx < 0 || !el.data || !el.data[idx] || typeof LegendEdit === "undefined"){ return; }
+    const patch = LegendEdit.buildRestyle({
+      name: document.getElementById("leName").value,
+      color: document.getElementById("leColor").value,
+      dash: document.getElementById("leDash").value,
+      width: Number(document.getElementById("leWidth").value),
+      symbol: document.getElementById("leSymbol").value,
+      markerSize: Number(document.getElementById("leMarkerSize").value)
+    });
+    restyleLegendTrace(el, idx, patch);
+    closeLegendEditor();
+  });
+
+  document.getElementById("leApplyPalette").addEventListener("click", function(){
+    const el = legendEditTarget.el;
+    if (!el || !el.data || typeof LegendEdit === "undefined"){ return; }
+    const select = document.getElementById("lePalette");
+    const colors = LegendEdit.paletteColors(select ? select.value : "tab10");
+    if (!colors.length){ return; }
+    let colorIndex = 0;
+    (el.data || []).forEach(function(trace, i){
+      if (trace && trace._spMeasure){ return; }
+      const color = colors[colorIndex % colors.length];
+      colorIndex = colorIndex + 1;
+      restyleLegendTrace(el, i, LegendEdit.buildRestyle({ color: color }));
+    });
+  });
+
   function plotlyConfig(fig){
     return {
       responsive: true,
       displaylogo: false,
       scrollZoom: false,
+      edits: { legendPosition: true },
       modeBarButtonsToRemove: ["select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "toImage"]
     };
   }
-  // Hauteur d'un graphe en vue liste : on conserve le ratio de la figure
-  // matplotlib par rapport a la largeur disponible (donc plus haut en
-  // plein ecran), borne pour rester raisonnable.
-  function listPlotHeight(el, fig){
+  // Dimensionnement liste : le graphe prend toute la largeur disponible de
+  // sa carte, et la hauteur suit le ratio matplotlib. Pas de plafond cache.
+  function plotAspect(fig){
     const wIn = fig.plotly && fig.plotly.width_in;
     const hIn = fig.plotly && fig.plotly.height_in;
-    const aspect = (wIn && hIn) ? (hIn / wIn) : 0.58;
-    const w = el.clientWidth || (el.parentElement && el.parentElement.clientWidth) || 700;
-    const maxH = Math.round(window.innerHeight * 0.92);
-    return Math.max(300, Math.min(Math.round(w * aspect), maxH));
+    return (wIn && hIn) ? (hIn / wIn) : 0.58;
+  }
+  function nativePlotWidth(fig){
+    const wIn = fig.plotly && fig.plotly.width_in;
+    return Math.round((wIn || 7) * 120);
+  }
+  function listPlotWidth(el, fig){
+    if (document.body.classList.contains("no-fit")){ return Math.max(300, nativePlotWidth(fig)); }
+    const wrap = el && el.parentElement;
+    const rectW = wrap ? wrap.getBoundingClientRect().width : 0;
+    const clientW = wrap ? wrap.clientWidth : 0;
+    const fallback = (list && list.clientWidth) || document.documentElement.clientWidth || 700;
+    return Math.max(300, Math.floor(rectW || clientW || fallback));
+  }
+  function listPlotHeight(el, fig){
+    const aspect = plotAspect(fig);
+    const width = listPlotWidth(el, fig);
+    return Math.max(300, Math.round(width * aspect));
+  }
+  function applyListPlotSizing(el, fig){
+    if (!el || !el.parentElement){ return { width: 0, height: 300 }; }
+    const width = listPlotWidth(el, fig);
+    const height = listPlotHeight(el, fig);
+    el.style.width = width + "px";
+    el.style.maxWidth = document.body.classList.contains("no-fit") ? "none" : "100%";
+    el.style.height = height + "px";
+    return { width: width, height: height };
+  }
+
+  // Matplotlib peut exporter des sous-graphes dont les domaines Plotly xaxis
+  // n'occupent qu'une fraction du papier. Quand le webview s'elargit, ca laisse
+  // un grand blanc a droite et les axes restent ecrases. On remappe donc l'union
+  // des domaines X vers [0,1] en conservant les ecarts relatifs entre subplots.
+  function stretchHorizontalDomains(layout){
+    const keys = Object.keys(layout || {}).filter(function(key){
+      return /^xaxis\d*$/.test(key) && layout[key] && Array.isArray(layout[key].domain);
+    });
+    if (!keys.length){ return; }
+    let minD = 1, maxD = 0;
+    keys.forEach(function(key){
+      const d = layout[key].domain;
+      const a = Number(d[0]), b = Number(d[1]);
+      if (isFinite(a) && isFinite(b) && b > a){
+        minD = Math.min(minD, a);
+        maxD = Math.max(maxD, b);
+      }
+    });
+    const span = maxD - minD;
+    if (!isFinite(span) || span <= 0.05){ return; }
+    if (minD <= 0.005 && maxD >= 0.995){ return; }
+    keys.forEach(function(key){
+      const d = layout[key].domain;
+      const a = Number(d[0]), b = Number(d[1]);
+      if (!isFinite(a) || !isFinite(b) || b <= a){ return; }
+      layout[key].domain = [Math.max(0, (a - minD) / span), Math.min(1, (b - minD) / span)];
+    });
   }
   // Format compact d'un nombre pour l'affichage des coordonnees.
   function fmtNum(v){
@@ -1610,6 +1858,8 @@
   function renderPlotly(el, fig, fill, coordsEl){
     if (!fig.plotly || !el || typeof Plotly === "undefined"){ return; }
     const layout = JSON.parse(JSON.stringify(fig.plotly.layout || {}));
+    delete layout.width;
+    stretchHorizontalDomains(layout);
     // Coordonnees affichees en dehors du graphe : on coupe l'info-bulle
     // flottante sur le graphe et on garde seulement les evenements de survol.
     layout.hovermode = layout.hovermode || "closest";
@@ -1619,7 +1869,10 @@
     if (fill){
       delete layout.height; layout.autosize = true;
     } else {
-      layout.height = listPlotHeight(el, fig);
+      const initialSize = applyListPlotSizing(el, fig);
+      layout.width = initialSize.width;
+      layout.height = initialSize.height;
+      layout.autosize = false;
       listPlots.push({ el: el, fig: fig });
       // Redimensionnement fiable (changement d'ecran, maximisation, affichage
       // du panneau) : un ResizeObserver par graphe recalcule largeur ET hauteur.
@@ -1635,8 +1888,8 @@
             }
             if (!el.clientWidth){ return; }   // panneau masque : pas de mesure parasite
             try {
-              Plotly.Plots.resize(el);
-              Plotly.relayout(el, { height: listPlotHeight(el, fig) }).then(function(){
+              const size = applyListPlotSizing(el, fig);
+              Plotly.relayout(el, { width: size.width, height: size.height }).then(function(){
                 if (el._spHasInset){ positionInsetOverlay(el); }
               }).catch(function(){});
             } catch (e) {}
@@ -1661,6 +1914,7 @@
       click: function(gd){
         gd._spInsetArmed = !gd._spInsetArmed;
         if (gd._spInsetArmed && gd._spMeasureArmed){ gd._spMeasureArmed = false; setMeasureArmedFeedback(gd); }
+        if (gd._spInsetArmed && gd._spLegendEditArmed){ gd._spLegendEditArmed = false; setLegendEditFeedback(gd, coordsEl); }
         setInsetArmedFeedback(gd, coordsEl);
       }
     }, {
@@ -1670,6 +1924,18 @@
       // distincte de la loupe et du cadre d'encart.
       icon: { width: 16, height: 16, path: "M1 5 L15 5 L15 11 L1 11 Z M4 5 L4 8.5 M7 5 L7 9.5 M10 5 L10 8.5 M13 5 L13 9.5" },
       click: function(gd){ armMeasure(gd); }
+    }, {
+      name: "legendEdit",
+      title: "Editer la legende : cliquer pour armer, puis cliquer une entree",
+      icon: { width: 16, height: 16, path: "M2 14 L2 11 L10 3 L13 6 L5 14 Z M9 4 L12 7" },
+      click: function(gd){
+        gd._spLegendEditArmed = !gd._spLegendEditArmed;
+        if (gd._spLegendEditArmed){
+          if (gd._spInsetArmed){ gd._spInsetArmed = false; setInsetArmedFeedback(gd, coordsEl); }
+          if (gd._spMeasureArmed){ gd._spMeasureArmed = false; setMeasureArmedFeedback(gd); }
+        }
+        setLegendEditFeedback(gd, coordsEl);
+      }
     }];
     el._spFig = fig;
     el._spCoordsEl = coordsEl;
@@ -1691,6 +1957,11 @@
         setInsetArmedFeedback(el, coordsEl);
         applyZoomInset(el, selection);
       });
+      el.on("plotly_legendclick", function(ev){
+        if (!el._spLegendEditArmed){ return true; }
+        openLegendEditor(el, ev.curveNumber);
+        return false;
+      });
     }
     if (coordsEl && el.on){
       el.on("plotly_hover", function(ev){
@@ -1701,19 +1972,24 @@
       el.on("plotly_unhover", function(){ if (!el._spInsetArmed){ coordsEl.textContent = ""; } });
     }
   }
+  function resizeListPlots(){
+    if (typeof Plotly === "undefined"){ return; }
+    for (let i = listPlots.length - 1; i >= 0; i--){
+      const p = listPlots[i];
+      if (!document.body.contains(p.el)){ listPlots.splice(i, 1); continue; }
+      try {
+        const size = applyListPlotSizing(p.el, p.fig);
+        Plotly.relayout(p.el, { width: size.width, height: size.height }).then(function(){
+          if (p.el._spHasInset){ positionInsetOverlay(p.el); }
+        }).catch(function(){});
+      } catch (e) {}
+    }
+  }
   let resizeTimer = null;
   window.addEventListener("resize", function(){
     if (resizeTimer){ clearTimeout(resizeTimer); }
     resizeTimer = setTimeout(function(){
-      for (let i = listPlots.length - 1; i >= 0; i--){
-        const p = listPlots[i];
-        if (!document.body.contains(p.el)){ listPlots.splice(i, 1); continue; }
-        try {
-          Plotly.relayout(p.el, { height: listPlotHeight(p.el, p.fig) }).then(function(){
-            if (p.el._spHasInset){ positionInsetOverlay(p.el); }
-          }).catch(function(){});
-        } catch (e) {}
-      }
+      resizeListPlots();
       if (compareOverlay.classList.contains("show")){ resizeComparePlots(); }
     }, 120);
   });
@@ -2239,13 +2515,14 @@
   // Prepare une trace pour la superposition : la prefixe du label de sa figure
   // (compareLabel) et, pour les figures secondaires (index>0), la rend plus
   // discrete (opacite + style de ligne pointille) pour distinguer les sources.
-  function overlayTrace(trace, label, index){
+  function overlayTrace(trace, title, index){
     const out = clone(trace);
     const secondary = index > 0;
     out.xaxis = "x";
     out.yaxis = "y";
     out.showlegend = true;
-    out.name = label + (out.name ? " - " + out.name : "");
+    const prefix = LegendEdit.compareLegendPrefix(title, compareLabel(index));
+    out.name = prefix + (out.name ? " : " + out.name : "");
     if (secondary){
       out.opacity = Math.min(typeof out.opacity === "number" ? out.opacity : 1, 0.78);
       if (out.line){
@@ -2287,11 +2564,10 @@
     let heightIn = first.plotly.height_in || 4;
     let curveKey = 0;   // suit l'ordre des cles c0,c1... de flattenCurves
     figs.forEach(function(fig, index){
-      const label = compareLabel(index);
       widthIn = Math.max(widthIn, fig.plotly.width_in || 7);
       heightIn = Math.max(heightIn, fig.plotly.height_in || 4);
       fig.plotly.data.forEach(function(trace){
-        const out = overlayTrace(trace, label, index);
+        const out = overlayTrace(trace, fig.title, index);
         // Cle de courbe (pour designer la reference d'erreur en cliquant la trace).
         if (isFlattenCurve(trace)){ out._curveKey = "c" + curveKey; curveKey++; }
         data.push(out);
@@ -2429,7 +2705,9 @@
       plot.className = "compare-plot";
       stack.appendChild(plot);
       compareBody.appendChild(stack);
-      const merged = CompareUtil.mergeSubplotFigures(figs);
+      const merged = CompareUtil.mergeSubplotFigures(figs, function(fig, index){
+        return LegendEdit.compareLegendPrefix(fig.title, compareLabel(index));
+      });
       pendingPlots.push(function(){ renderPlotly(plot, merged, true, null); });
     } else {
       const stack = document.createElement("div");
@@ -2554,6 +2832,7 @@
     if (e.key === "Escape"){
       closeOverlay();
       closeCompare();
+      closeLegendEditor();
     }
   });
 
@@ -2678,7 +2957,9 @@
     // PDF : figure sans encart et hors comparaison -> PDF matplotlib natif
     // (signal useNative). Sinon -> PDF raster genere ici (encart/erreurs inclus).
     if (options.format === "pdf"){
-      if (!isCompare && !el._spHasInset){
+      // PDF natif vectoriel seulement si l'extension l'autorise (figure non
+      // editee) et sans encart. Sinon -> PDF raster de l'element vivant (edite).
+      if (!isCompare && !el._spHasInset && options.allowNative !== false){
         postExportResult(msg.requestId, true, null, null, true);
         return;
       }
@@ -2760,6 +3041,7 @@
     } else if (msg.type === "reset"){
       closeOverlay();
       closeCompare();
+      closeLegendEditor();
       Object.keys(figStore).forEach(removeCard);
       list.innerHTML = "";
       n = 0;
@@ -2789,6 +3071,7 @@
   }
   document.getElementById("fitToggle").addEventListener("change", function(e){
     document.body.classList.toggle("no-fit", !e.target.checked);
+    resizeListPlots();
   });
 
   refreshCount();

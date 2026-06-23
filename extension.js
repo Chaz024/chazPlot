@@ -33,6 +33,7 @@ const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const storage = require("./storage");
+const LegendEdit = require("./media/legend_edit.js");
 
 // --- Etat global du module ---
 let panel = null;          // l'unique WebviewPanel (null si ferme)
@@ -245,6 +246,21 @@ function updateTags(id, tags) {
   postToWebview({ type: "tags", id: id, tags: fig.tags });
 }
 
+// Edition d'une trace depuis la legende (vue liste) : applique le patch a cles
+// pointees a la figure en memoire et re-ecrit la figure persistee (best-effort).
+function updateFigureTrace(id, traceIndex, patch) {
+  const fig = figures.find(function (f) { return f.id === id; });
+  if (!fig || !fig.plotly || !Array.isArray(fig.plotly.data)) { return; }
+  const idx = Number(traceIndex);
+  const trace = fig.plotly.data[idx];
+  if (!trace || !patch || typeof patch !== "object") { return; }
+  LegendEdit.applyPatch(trace, patch);
+  // Le PDF vectoriel natif (rendu par le backend a la creation) ne reflete pas
+  // cette edition : on marque la figure pour basculer l'export PDF en raster.
+  fig.edited = true;
+  try { storage.save(fig); } catch (e) { /* best-effort */ }
+}
+
 function editTags(id) {
   const fig = figures.find(function (f) { return f.id === id; });
   if (!fig) { return; }
@@ -400,12 +416,15 @@ async function saveOne(id, frameIndex) {
     });
     if (!uri) { return; }
     const requestId = String(nextExportRequestId++);
+    // PDF vectoriel natif disponible seulement si rien n'a ete edite dans le
+    // webview (sinon fig.pdf est perime). Le webview respecte ce signal.
+    const allowNative = !!(isPdf && fig.pdf && fig.id !== "compare" && !fig.edited);
     pendingExports[requestId] = {
       filePath: uri.fsPath,
       title: fig.title,
-      // Repli si le webview renvoie useNative (figure sans encart) : PDF matplotlib.
-      nativePdf: (isPdf && fig.pdf && fig.id !== "compare") ? fig.pdf : null
+      nativePdf: allowNative ? fig.pdf : null
     };
+    options.allowNative = allowNative;
     postToWebview({ type: "exportPlotly", id: fig.id, requestId: requestId, options: options });
     return;
   }
@@ -617,6 +636,7 @@ function setupPanel(p) {
       else { vscode.window.showInformationMessage(text); }
     }
     else if (msg.type === "updateTags") { updateTags(msg.id, msg.tags); }
+    else if (msg.type === "updateFigure") { updateFigureTrace(msg.id, msg.traceIndex, msg.patch); }
     else if (msg.type === "editTags") { editTags(msg.id); }
     else if (msg.type === "saveAll") { saveAll(); }
     else if (msg.type === "delete") { deleteOne(msg.id); }
@@ -708,6 +728,9 @@ function webviewHtml(webview) {
   const pdfExportUri = webview.asWebviewUri(
     vscode.Uri.file(path.join(extContext.extensionPath, "media", "pdf_export.js"))
   );
+  const legendEditUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(extContext.extensionPath, "media", "legend_edit.js"))
+  );
   const htmlPath = path.join(extContext.extensionPath, "media", "panel.html");
   let template = null;
   try {
@@ -728,7 +751,8 @@ function webviewHtml(webview) {
       .replace(/{{compareUtilUri}}/g, String(compareUtilUri))
       .replace(/{{bundleMetaUri}}/g, String(bundleMetaUri))
       .replace(/{{figureFilterUri}}/g, String(figureFilterUri))
-      .replace(/{{pdfExportUri}}/g, String(pdfExportUri));
+      .replace(/{{pdfExportUri}}/g, String(pdfExportUri))
+      .replace(/{{legendEditUri}}/g, String(legendEditUri));
   }
   // media/panel.html introuvable : l'extension est mal installee.
   return [
