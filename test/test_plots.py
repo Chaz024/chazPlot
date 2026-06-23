@@ -145,26 +145,106 @@ fig7.suptitle("Cas combines interactifs")
 fig7.canvas.manager.set_window_title("interactive_combo_subplots")
 plt.show()
 
-# ---- Figure 8 : animation (onde qui se propage) ----
-fig8, ax8 = plt.subplots(figsize=(7, 4))
-xa = np.linspace(0.0, 4.0 * np.pi, 400)
-(line_a,) = ax8.plot(xa, np.sin(xa), color="teal")
-env_up, = ax8.plot(xa, np.exp(-xa / 10.0), color="gray", linewidth=0.8, linestyle="--")
-env_dn, = ax8.plot(xa, -np.exp(-xa / 10.0), color="gray", linewidth=0.8, linestyle="--")
-ax8.set_ylim(-1.2, 1.2)
-ax8.set_xlabel("x")
-ax8.set_ylabel("amplitude")
-ax8.set_title("Onde amortie qui se propage")
-ax8.grid(True, alpha=0.3)
+# # ---- Figure 8 : animation (onde qui se propage) ----
+# fig8, ax8 = plt.subplots(figsize=(7, 4))
+# xa = np.linspace(0.0, 4.0 * np.pi, 400)
+# (line_a,) = ax8.plot(xa, np.sin(xa), color="teal")
+# env_up, = ax8.plot(xa, np.exp(-xa / 10.0), color="gray", linewidth=0.8, linestyle="--")
+# env_dn, = ax8.plot(xa, -np.exp(-xa / 10.0), color="gray", linewidth=0.8, linestyle="--")
+# ax8.set_ylim(-1.2, 1.2)
+# ax8.set_xlabel("x")
+# ax8.set_ylabel("amplitude")
+# ax8.set_title("Onde amortie qui se propage")
+# ax8.grid(True, alpha=0.3)
 
-def _update(frame):
-    phase = frame * 0.25
-    line_a.set_ydata(np.sin(xa - phase) * np.exp(-xa / 10.0))
-    return (line_a,)
+# def _update(frame):
+#     phase = frame * 0.25
+#     line_a.set_ydata(np.sin(xa - phase) * np.exp(-xa / 10.0))
+#     return (line_a,)
 
-# garder une reference a l'objet animation (sinon il peut etre collecte)
-anim = FuncAnimation(fig8, _update, frames=60, interval=40)
-fig8.canvas.manager.set_window_title("onde_animee")
+# # garder une reference a l'objet animation (sinon il peut etre collecte)
+# anim = FuncAnimation(fig8, _update, frames=60, interval=40)
+# fig8.canvas.manager.set_window_title("onde_animee")
+# plt.show()
+
+
+
+
+# Configuration des données communes
+x = np.linspace(0, 10, 250)
+
+# =====================================================================
+# CAS 1 : 5 PAIRES DE COURBES (Séparées en 2 Figures)
+# =====================================================================
+n_pairs = 5
+colors_pairs = ['crimson', 'royalblue', 'forestgreen', 'darkorange', 'purple']
+
+# --- Figure 1 : Uniquement les Références ---
+plt.figure(1, figsize=(9, 5))
+for i in range(n_pairs):
+    y_ref = np.sin(x + i * 0.5)
+    plt.plot(x, y_ref, color=colors_pairs[i], linewidth=2, label=f"Réf {i+1}")
+
+plt.title("Cas 1 : Les 5 Courbes de Référence", fontsize=12, fontweight='bold')
+plt.xlabel("X")
+plt.ylabel("Valeurs")
+plt.grid(True, linestyle=":", alpha=0.5)
+plt.legend(loc="upper right")
+plt.tight_layout()
+
+# --- Figure 2 : Uniquement les Tests ---
+plt.figure(2, figsize=(9, 5))
+for i in range(n_pairs):
+    y_ref = np.sin(x + i * 0.5)
+    y_test = y_ref + np.random.normal(0, 0.08, size=x.shape) # Ta variable de test
+    plt.plot(x, y_test, color=colors_pairs[i], linestyle="--", alpha=0.8, label=f"Test {i+1}")
+
+plt.title("Cas 2 : Les 5 Courbes de Test", fontsize=12, fontweight='bold')
+plt.xlabel("X")
+plt.ylabel("Valeurs")
+plt.grid(True, linestyle=":", alpha=0.5)
+plt.legend(loc="upper right")
+plt.tight_layout()
+
+
+# =====================================================================
+# CAS 2 : 4 GROUPES DE 3 COURBES (Séparés en 2 Figures)
+# =====================================================================
+n_groups = 4
+colors_groups = ['#E66101', '#92C5DE', '#5E3C99', '#FDB863']
+
+# --- Figure 3 : Uniquement les Références des Groupes ---
+plt.figure(3, figsize=(9, 5))
+for i in range(n_groups):
+    y_ref = np.cos(x * (0.5 + i * 0.2))
+    plt.plot(x, y_ref, color=colors_groups[i], linewidth=2.5, label=f"Gr. {i+1} - Réf")
+
+plt.title("Cas 2 : Références des 4 Groupes", fontsize=12, fontweight='bold')
+plt.xlabel("X")
+plt.ylabel("Amplitude")
+plt.grid(True, linestyle=":", alpha=0.5)
+plt.legend(loc="lower left")
+plt.tight_layout()
+
+# --- Figure 4 : Uniquement les Tests (A et B) des Groupes ---
+plt.figure(4, figsize=(9, 5))
+for i in range(n_groups):
+    y_ref = np.cos(x * (0.5 + i * 0.2))
+    y_test1 = y_ref + np.random.normal(0, 0.1, size=x.shape)  # Ton Test A
+    y_test2 = y_ref * 0.8 + np.sin(x * 2) * 0.1               # Ton Test B
+    
+    # On garde la couleur du groupe, mais on varie les styles pour Test A et Test B
+    plt.plot(x, y_test1, color=colors_groups[i], linestyle="-.", linewidth=1.2, label=f"Gr. {i+1} - Test A")
+    plt.plot(x, y_test2, color=colors_groups[i], linestyle="--", linewidth=1.2, label=f"Gr. {i+1} - Test B")
+
+plt.title("Cas 2 : Courbes de Test (A & B) des 4 Groupes", fontsize=12, fontweight='bold')
+plt.xlabel("X")
+plt.ylabel("Amplitude")
+plt.grid(True, linestyle=":", alpha=0.5)
+plt.legend(loc="lower left", ncol=2) # En 2 colonnes pour que ce soit propre
+plt.tight_layout()
+
+# Affichage de toutes les fenêtres en même temps
 plt.show()
 
 print("7 figures + 1 animation envoyees au panneau Graphes.")
