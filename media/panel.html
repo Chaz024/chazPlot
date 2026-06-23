@@ -220,6 +220,28 @@
   .legend-editor input[type=color]{ min-width:44px; width:44px; padding:1px 3px; }
   .legend-editor input[type=number]{ width:64px; min-width:64px; }
   .legend-editor .le-name{ min-width:150px; }
+  .legend-editor .le-text{ min-width:230px; }
+  .legend-editor[data-mode="trace"] .le-text-field{ display:none; }
+  .legend-editor[data-mode="text"] .le-trace-field{ display:none; }
+  .legend-editor .le-inline{ flex-direction:row; align-items:center; gap:6px; height:26px; }
+  .legend-editor .le-inline input{ min-width:0; width:auto; height:auto; }
+  .publication-editor{
+    position:fixed; right:16px; bottom:16px; z-index:121;
+    display:none; align-items:flex-end; gap:8px; flex-wrap:wrap;
+    max-width:calc(100vw - 32px); padding:10px;
+    border:1px solid var(--sp-border); border-radius:8px;
+    background:var(--sp-surface); color:var(--sp-text);
+    box-shadow:var(--sp-shadow-2);
+  }
+  .publication-editor label{ display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--sp-text-dim); }
+  .publication-editor select{
+    min-width:170px; height:28px; padding:2px 8px;
+    border:1px solid var(--vscode-input-border, var(--sp-border)); border-radius:6px;
+    background:var(--vscode-input-background); color:var(--vscode-input-foreground);
+    font-family:inherit; font-size:12px;
+  }
+  .publication-editor .pub-actions{ display:flex; gap:6px; align-items:flex-end; }
+  .publication-editor .pub-hint{ width:100%; font-size:11px; color:var(--sp-text-dim); }
   .le-color-tools{ display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
   .le-swatches{ display:flex; gap:4px; flex-wrap:wrap; max-width:190px; }
   .le-swatch{
@@ -452,14 +474,32 @@
   </div>
 
 
-  <!-- Editeur d'entree de legende -->
-  <div class="legend-editor" id="legendEditor" role="dialog" aria-label="Edition de legende">
-    <label>Nom <input class="le-name" id="leName" type="text"></label>
-    <div class="le-color-tools">
+  <!-- Style publication -->
+  <div class="publication-editor" id="publicationEditor" role="dialog" aria-label="Style publication">
+    <label>Preset <select id="pubPreset">
+      <option value="article">Article</option>
+      <option value="presentation">Presentation</option>
+      <option value="rapport">Rapport</option>
+      <option value="colorblind">Colorblind</option>
+    </select></label>
+    <span class="pub-actions">
+      <button class="compact primary" id="pubApply">Appliquer</button>
+      <button class="compact" id="pubClose">Fermer</button>
+    </span>
+    <span class="pub-hint">Le preset est previsualise immediatement.</span>
+  </div>
+
+  <div class="legend-editor" id="legendEditor" role="dialog" aria-label="Edition de legende" data-mode="trace">
+    <label class="le-trace-field">Nom <input class="le-name" id="leName" type="text"></label>
+    <label class="le-text-field">Texte <input class="le-text" id="leTextValue" type="text"></label>
+    <label class="le-text-field">Taille police <input id="leFontSize" type="number" min="6" max="96" step="1" value="14"></label>
+    <label class="le-text-field le-inline"><input id="leBold" type="checkbox"> Gras</label>
+    <label class="le-text-field le-inline"><input id="leItalic" type="checkbox"> Italique</label>
+    <div class="le-color-tools le-trace-field">
       <label>Couleur <input id="leColor" type="color" value="#1f77b4"></label>
       <div class="le-swatches" id="leBaseColors" aria-label="Couleurs de base"></div>
     </div>
-    <details class="le-advanced" id="leAdvancedColors">
+    <details class="le-advanced le-trace-field" id="leAdvancedColors">
       <summary>Avance</summary>
       <div class="le-advanced-body">
         <div class="le-picker">
@@ -469,10 +509,10 @@
         <label>Hex <input id="leHex" type="text" maxlength="7" spellcheck="false" value="#1f77b4"></label>
       </div>
     </details>
-    <label>Trait <select id="leDash"></select></label>
-    <label>Epaisseur <input id="leWidth" type="number" min="0.2" max="20" step="0.2" value="2"></label>
-    <label>Marqueur <select id="leSymbol"></select></label>
-    <label>Taille <input id="leMarkerSize" type="number" min="1" max="40" step="1" value="6"></label>
+    <label class="le-trace-field">Trait <select id="leDash"></select></label>
+    <label class="le-trace-field">Epaisseur <input id="leWidth" type="number" min="0.2" max="20" step="0.2" value="2"></label>
+    <label class="le-trace-field">Marqueur <select id="leSymbol"></select></label>
+    <label class="le-trace-field">Taille <input id="leMarkerSize" type="number" min="1" max="40" step="1" value="6"></label>
     <button class="compact primary" id="leApply">Appliquer</button>
     <button class="compact" id="leClose">Fermer</button>
   </div>
@@ -1602,7 +1642,51 @@
   // En vue liste, le patch est persiste via extension.js ; en comparaison il
   // reste de session.
   // ----------------------------------------------------------
-  let legendEditTarget = { el: null, idx: -1 };
+  let legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "" };
+
+  function normalizedTitleText(value){
+    if (typeof LegendEdit === "undefined"){ return value == null ? "" : String(value); }
+    return LegendEdit.latexToPlainText(LegendEdit.titleText(value));
+  }
+
+  function normalizeLayoutTitles(layout){
+    if (!layout || typeof LegendEdit === "undefined"){ return; }
+    if (layout.title !== undefined){
+      if (layout.title && typeof layout.title === "object") { layout.title.text = normalizedTitleText(layout.title); }
+      else { layout.title = { text: normalizedTitleText(layout.title) }; }
+    }
+    Object.keys(layout).forEach(function(key){
+      if (!/^[xy]axis\d*$/.test(key)){ return; }
+      const axis = layout[key];
+      if (axis && axis.title !== undefined){
+        if (axis.title && typeof axis.title === "object") { axis.title.text = normalizedTitleText(axis.title); }
+        else { axis.title = { text: normalizedTitleText(axis.title) }; }
+      }
+    });
+    if (Array.isArray(layout.annotations)){
+      layout.annotations.forEach(function(annotation){
+        if (annotation && annotation.text !== undefined){ annotation.text = normalizedTitleText(annotation.text); }
+      });
+    }
+  }
+
+  function textFontSize(layout, key, fallback){
+    const fontKey = textFontSizeKey(key);
+    const parts = fontKey.split(".");
+    let target = layout || {};
+    for (let i = 0; i < parts.length; i++){
+      const m = /^(\w+)\[(\d+)\]$/.exec(parts[i]);
+      target = m ? ((target[m[1]] || [])[Number(m[2])]) : target[parts[i]];
+      if (target == null){ return fallback || 14; }
+    }
+    return Number(target) || fallback || 14;
+  }
+
+  function textFontSizeKey(key){
+    if (/^annotations\[\d+\]\.text$/.test(key)){ return key.replace(/\.text$/, ".font.size"); }
+    if (key === "title.text"){ return "title.font.size"; }
+    return key.replace(/\.title\.text$/, ".title.font.size");
+  }
 
   function fillLegendSelect(select, options){
     if (!select || !options){ return; }
@@ -1628,7 +1712,7 @@
   // Restyle la trace ciblee en direct, SANS persister (apercu pendant le drag).
   function livePreviewColor(hex){
     const t = legendEditTarget;
-    if (!t.el || t.idx < 0 || typeof LegendEdit === "undefined"){ return; }
+    if (t.mode !== "trace" || !t.el || t.idx < 0 || typeof LegendEdit === "undefined"){ return; }
     try { Plotly.restyle(t.el, LegendEdit.buildRestyle({ color: hex }), [t.idx]); } catch (e) {}
   }
 
@@ -1732,12 +1816,20 @@
   function closeLegendEditor(){
     const box = document.getElementById("legendEditor");
     if (box){ box.style.display = "none"; }
-    legendEditTarget = { el: null, idx: -1 };
+    legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "" };
+  }
+
+  function showLegendEditor(mode){
+    const box = document.getElementById("legendEditor");
+    if (!box){ return; }
+    box.dataset.mode = mode;
+    box.style.display = "flex";
   }
 
   function openLegendEditor(el, idx){
     if (!el || !el.data || !el.data[idx] || typeof LegendEdit === "undefined"){ return; }
-    legendEditTarget = { el: el, idx: idx };
+    closePublicationEditor();
+    legendEditTarget = { mode: "trace", el: el, idx: idx, textKey: "", fontSizeKey: "" };
     const v = LegendEdit.readTrace(el.data[idx]);
     document.getElementById("leName").value = v.name;
     document.getElementById("leColor").value = LegendEdit.toHexColor(v.color, "#1f77b4");
@@ -1746,12 +1838,24 @@
     document.getElementById("leWidth").value = String(v.width);
     document.getElementById("leSymbol").value = v.symbol;
     document.getElementById("leMarkerSize").value = String(v.markerSize);
-    document.getElementById("legendEditor").style.display = "flex";
+    showLegendEditor("trace");
+  }
+
+  function openTextEditor(el, target){
+    if (!el || !target || !target.key || typeof LegendEdit === "undefined"){ return; }
+    closePublicationEditor();
+    const style = LegendEdit.textStyle(target.text);
+    legendEditTarget = { mode: "text", el: el, idx: -1, textKey: target.key, fontSizeKey: textFontSizeKey(target.key) };
+    document.getElementById("leTextValue").value = LegendEdit.latexToPlainText(style.text);
+    document.getElementById("leFontSize").value = String(textFontSize(el.layout || el._spBaseLayout || {}, target.key, target.defaultSize || 14));
+    document.getElementById("leBold").checked = !!style.bold;
+    document.getElementById("leItalic").checked = !!style.italic;
+    showLegendEditor("text");
   }
 
   function setLegendEditFeedback(el, coordsEl){
     if (el.parentElement){ el.parentElement.classList.toggle("sp-legend-armed", !!el._spLegendEditArmed); }
-    if (coordsEl){ coordsEl.textContent = el._spLegendEditArmed ? "Mode legende : cliquez une entree a editer" : ""; }
+    if (coordsEl){ coordsEl.textContent = el._spLegendEditArmed ? "Mode edition : cliquez une entree de legende, un titre ou un axe" : ""; }
   }
 
   function persistLegendPatch(el, idx, patch){
@@ -1789,18 +1893,11 @@
     persistLegendPatch(el, idx, patch);
   }
 
-  // Edition de titre / labels d'axes (Plotly editable) : l'utilisateur tape
-  // directement par-dessus le texte, Plotly emet un plotly_relayout avec
-  // title.text / xaxis.title.text / yaxis.title.text. On persiste dans la
-  // figure source (vue liste). En comparaison (pas d'id plot-N), l'edition
-  // reste vivante mais non persistee (le titre fusionne n'appartient a aucune
-  // figure source). Reutilise LegendEdit.applyPatch (cles pointees).
-  function persistLayoutEdits(el, update){
-    const patch = {};
-    ["title.text", "xaxis.title.text", "yaxis.title.text"].forEach(function(k){
-      if (k in update){ patch[k] = update[k]; }
-    });
-    if (!Object.keys(patch).length){ return; }
+  // Edition de titre / labels d'axes : le panneau de legende produit des
+  // patches Plotly a cles pointees. On accepte aussi les relayout directs
+  // residuels, mais le mode Plotly editable est desactive dans la config.
+  function persistLayoutPatch(el, patch){
+    if (!patch || !Object.keys(patch).length || typeof LegendEdit === "undefined"){ return; }
     if (el._spBaseLayout){ LegendEdit.applyPatch(el._spBaseLayout, patch); }
     const m = /^plot-(\d+)$/.exec(el.id || "");
     if (!m){ return; }
@@ -1809,14 +1906,227 @@
     if (!fig || !fig.plotly){ return; }
     if (!fig.plotly.layout){ fig.plotly.layout = {}; }
     LegendEdit.applyPatch(fig.plotly.layout, patch);
+    fig.edited = true;
     vscodeApi.postMessage({ type: "updateFigureLayout", id: id, patch: patch });
   }
+
+  function persistLayoutEdits(el, update){
+    if (el._spApplyingLegendLayout){ return; }
+    const patch = {};
+    Object.keys(update || {}).forEach(function(k){
+      if (k === "title.text" || /^[xy]axis\d*\.title\.text$/.test(k)){
+        patch[k] = typeof LegendEdit !== "undefined" ? LegendEdit.latexToPlainText(update[k]) : update[k];
+      }
+    });
+    persistLayoutPatch(el, patch);
+  }
+
+  function buildTextLayoutPatch(){
+    if (typeof LegendEdit === "undefined" || legendEditTarget.mode !== "text"){ return {}; }
+    const t = legendEditTarget;
+    const patch = {};
+    patch[t.textKey] = LegendEdit.styledText(
+      document.getElementById("leTextValue").value,
+      document.getElementById("leBold").checked,
+      document.getElementById("leItalic").checked
+    );
+    const size = Number(document.getElementById("leFontSize").value);
+    if (isFinite(size) && size > 0){ patch[t.fontSizeKey] = size; }
+    return patch;
+  }
+
+  function applyLegendLayoutPatch(el, patch){
+    if (!patch || !Object.keys(patch).length){ return; }
+    persistLayoutPatch(el, patch);
+    try {
+      el._spApplyingLegendLayout = true;
+      Promise.resolve(Plotly.relayout(el, patch)).finally(function(){ el._spApplyingLegendLayout = false; });
+    } catch (e) {
+      el._spApplyingLegendLayout = false;
+    }
+  }
+
+  const PUBLICATION_PRESETS = {
+    article: { title: 20, axis: 16, tick: 12, legend: 12, line: 2, marker: 6, grid: "light", bg: "white", palette: "tab10", bold: false },
+    presentation: { title: 26, axis: 20, tick: 15, legend: 15, line: 3, marker: 8, grid: "light", bg: "white", palette: "tab10", bold: true },
+    rapport: { title: 22, axis: 17, tick: 13, legend: 13, line: 2.4, marker: 7, grid: "light", bg: "white", palette: "tab10", bold: true },
+    colorblind: { title: 20, axis: 16, tick: 12, legend: 12, line: 2.2, marker: 7, grid: "light", bg: "white", palette: "okabe", bold: false }
+  };
+  let publicationTarget = null;
+  let publicationPreview = null;
+  let publicationPreviewSeq = 0;
+
+  function readPublicationValues(){
+    const preset = document.getElementById("pubPreset");
+    return PUBLICATION_PRESETS[(preset && preset.value) || "article"] || PUBLICATION_PRESETS.article;
+  }
+
+  function capturePublicationState(el){
+    return {
+      data: clone(el.data || []),
+      layout: clone(el.layout || {}),
+      baseData: clone(el._spBaseData || []),
+      baseLayout: clone(el._spBaseLayout || {})
+    };
+  }
+
+  function restorePublicationPreview(){
+    if (!publicationTarget || !publicationPreview || typeof Plotly === "undefined"){ return Promise.resolve(); }
+    const el = publicationTarget;
+    el._spBaseData = clone(publicationPreview.baseData || []);
+    el._spBaseLayout = clone(publicationPreview.baseLayout || {});
+    return Promise.resolve(Plotly.react(el, clone(publicationPreview.data || []), clone(publicationPreview.layout || {}), el._spConfig || plotlyConfig(el._spFig || {})))
+      .catch(function(){});
+  }
+
+  function closePublicationEditor(keepPreview){
+    const box = document.getElementById("publicationEditor");
+    if (box){ box.style.display = "none"; }
+    const shouldRestore = !keepPreview && publicationTarget && publicationPreview;
+    publicationPreviewSeq += 1;
+    const done = shouldRestore ? restorePublicationPreview() : Promise.resolve();
+    publicationTarget = null;
+    publicationPreview = null;
+    return done;
+  }
+
+  function openPublicationEditor(el){
+    if (!el || typeof LegendEdit === "undefined"){ return; }
+    closeLegendEditor();
+    closePublicationEditor(false);
+    publicationTarget = el;
+    publicationPreview = capturePublicationState(el);
+    publicationPreviewSeq += 1;
+    const preset = document.getElementById("pubPreset");
+    if (preset){ preset.value = "article"; }
+    document.getElementById("publicationEditor").style.display = "flex";
+    previewPublicationStyle();
+  }
+
+  function gridPatch(axisKey, gridMode){
+    const light = gridMode === "light";
+    const full = gridMode === "full";
+    const patch = {};
+    patch[axisKey + ".showgrid"] = light || full;
+    patch[axisKey + ".gridcolor"] = light ? "rgba(0,0,0,0.12)" : "rgba(0,0,0,0.18)";
+    patch[axisKey + ".gridwidth"] = light ? 1 : 1.2;
+    patch[axisKey + ".zeroline"] = full;
+    patch[axisKey + ".linecolor"] = "rgba(0,0,0,0.72)";
+    patch[axisKey + ".tickcolor"] = "rgba(0,0,0,0.72)";
+    return patch;
+  }
+
+  function buildPublicationLayoutPatch(el, values){
+    const layout = el.layout || el._spBaseLayout || {};
+    const patch = {
+      "paper_bgcolor": values.bg === "transparent" ? "rgba(0,0,0,0)" : "#ffffff",
+      "plot_bgcolor": values.bg === "transparent" ? "rgba(0,0,0,0)" : "#ffffff",
+      "font.size": values.tick,
+      "title.font.size": values.title,
+      "legend.font.size": values.legend
+    };
+    if (values.bold && layout.title && layout.title.text){
+      patch["title.text"] = LegendEdit.styledText(layout.title.text, true, false);
+    }
+    Object.keys(layout).forEach(function(key){
+      if (!/^[xy]axis\d*$/.test(key)){ return; }
+      Object.assign(patch, gridPatch(key, values.grid));
+      patch[key + ".title.font.size"] = values.axis;
+      patch[key + ".tickfont.size"] = values.tick;
+      if (values.bold && layout[key] && layout[key].title && layout[key].title.text){
+        patch[key + ".title.text"] = LegendEdit.styledText(layout[key].title.text, true, false);
+      }
+    });
+    (layout.annotations || []).forEach(function(annotation, i){
+      patch["annotations[" + i + "].font.size"] = values.title;
+      if (values.bold && annotation && annotation.text){
+        patch["annotations[" + i + "].text"] = LegendEdit.styledText(annotation.text, true, false);
+      }
+    });
+    return patch;
+  }
+
+  function publicationTracePatch(trace, color, values){
+    const patch = {};
+    const mode = String((trace && trace.mode) || "");
+    const type = trace ? String(trace.type || "") : "";
+    if (trace && (trace.line !== undefined || /lines/.test(mode) || type === "scatter")){
+      patch["line.width"] = values.line;
+      if (color){ patch["line.color"] = color; }
+    }
+    if (trace && (trace.marker !== undefined || /markers/.test(mode) || type === "bar")){
+      patch["marker.size"] = values.marker;
+      if (color){ patch["marker.color"] = color; }
+    }
+    if (trace && trace.fill && trace.fill !== "none" && color){ patch["fillcolor"] = LegendEdit.hexToRgba(color, 0.22); }
+    return patch;
+  }
+
+  function applyPublicationPatchToGraph(el, values, persist){
+    if (!el || typeof Plotly === "undefined" || typeof LegendEdit === "undefined"){ return Promise.resolve(); }
+    const colors = LegendEdit.paletteColors(values.palette);
+    const layoutPatch = buildPublicationLayoutPatch(el, values);
+    if (persist){ persistLayoutPatch(el, layoutPatch); }
+    else if (el._spBaseLayout){ LegendEdit.applyPatch(el._spBaseLayout, layoutPatch); }
+    const promises = [Promise.resolve(Plotly.relayout(el, layoutPatch))];
+    (el.data || []).forEach(function(trace, i){
+      const patch = publicationTracePatch(trace, colors[i % colors.length], values);
+      if (!Object.keys(patch).length){ return; }
+      if (el._spBaseData && el._spBaseData[i]){ LegendEdit.applyPatch(el._spBaseData[i], patch); }
+      if (persist){ persistLegendPatch(el, i, patch); }
+      promises.push(Promise.resolve(Plotly.restyle(el, patch, [i])));
+    });
+    return Promise.all(promises).catch(function(){});
+  }
+
+  function previewPublicationStyle(){
+    if (!publicationTarget || !publicationPreview){ return; }
+    const el = publicationTarget;
+    const seq = ++publicationPreviewSeq;
+    const values = readPublicationValues();
+    el._spBaseData = clone(publicationPreview.baseData || []);
+    el._spBaseLayout = clone(publicationPreview.baseLayout || {});
+    Promise.resolve(Plotly.react(el, clone(publicationPreview.data || []), clone(publicationPreview.layout || {}), el._spConfig || plotlyConfig(el._spFig || {})))
+      .then(function(){
+        if (seq !== publicationPreviewSeq || publicationTarget !== el){ return null; }
+        return applyPublicationPatchToGraph(el, values, false);
+      })
+      .catch(function(){});
+  }
+
+  function commitPublicationStyle(){
+    if (!publicationTarget || !publicationPreview){ closePublicationEditor(true); return; }
+    const original = publicationPreview;
+    const el = publicationTarget;
+    el._spBaseData = clone(original.baseData || []);
+    el._spBaseLayout = clone(original.baseLayout || {});
+    const values = readPublicationValues();
+    publicationPreviewSeq += 1;
+    Promise.resolve(Plotly.react(el, clone(original.data || []), clone(original.layout || {}), el._spConfig || plotlyConfig(el._spFig || {})))
+      .then(function(){ return applyPublicationPatchToGraph(el, values, true); })
+      .finally(function(){ closePublicationEditor(true); });
+  }
+
+  (function initPublicationEditor(){
+    const preset = document.getElementById("pubPreset");
+    if (preset){ preset.addEventListener("change", previewPublicationStyle); }
+    const apply = document.getElementById("pubApply");
+    if (apply){ apply.addEventListener("click", commitPublicationStyle); }
+    const close = document.getElementById("pubClose");
+    if (close){ close.addEventListener("click", function(){ closePublicationEditor(false); }); }
+  })();
 
   document.getElementById("leClose").addEventListener("click", closeLegendEditor);
   document.getElementById("leApply").addEventListener("click", function(){
     const el = legendEditTarget.el;
+    if (!el || typeof LegendEdit === "undefined"){ return; }
+    if (legendEditTarget.mode === "text"){
+      applyLegendLayoutPatch(el, buildTextLayoutPatch());
+      closeLegendEditor();
+      return;
+    }
     const idx = legendEditTarget.idx;
-    if (!el || idx < 0 || !el.data || !el.data[idx] || typeof LegendEdit === "undefined"){ return; }
+    if (idx < 0 || !el.data || !el.data[idx]){ return; }
     const patch = LegendEdit.buildRestyle({
       name: document.getElementById("leName").value,
       color: document.getElementById("leColor").value,
@@ -1829,12 +2139,109 @@
     closeLegendEditor();
   });
 
+
+
+  function textFromDom(node){
+    return LegendEdit.latexToPlainText(LegendEdit.stripTextMarkup(node ? (node.textContent || "") : ""));
+  }
+
+  function layoutTextCandidate(layout, key){
+    if (key === "title.text"){ return LegendEdit.titleText((layout || {}).title); }
+    const axisMatch = /^([xy]axis\d*)\.title\.text$/.exec(key);
+    if (axisMatch){ return LegendEdit.titleText(((layout || {})[axisMatch[1]] || {}).title); }
+    const annMatch = /^annotations\[(\d+)\]\.text$/.exec(key);
+    if (annMatch){ return (((layout || {}).annotations || [])[Number(annMatch[1])] || {}).text || ""; }
+    return "";
+  }
+
+  function findAxisTextKey(layout, letter, clickedText){
+    const keys = Object.keys(layout || {}).filter(function(key){ return new RegExp("^" + letter + "axis\\d*$").test(key); });
+    const exact = keys.filter(function(key){ return textFromDom({ textContent: LegendEdit.titleText(layout[key].title) }) === clickedText; });
+    const picked = (exact[0] || keys[0] || (letter + "axis"));
+    return picked + ".title.text";
+  }
+
+  function findAnnotationTextKey(el, textEl, clickedText){
+    const nodes = Array.prototype.slice.call(el.querySelectorAll("g.annotation text, .annotation text, .annotation-text"));
+    let idx = nodes.indexOf(textEl);
+    const annotations = ((el.layout || {}).annotations || []);
+    if (idx < 0){
+      idx = annotations.findIndex(function(a){ return textFromDom({ textContent: a && a.text }) === clickedText; });
+    }
+    return idx >= 0 ? "annotations[" + idx + "].text" : "";
+  }
+
+  function editableTextNodes(el){
+    return Array.prototype.slice.call(el.querySelectorAll(
+      ".gtitle, .xtitle, .ytitle, g.annotation text, .annotation text, .annotation-text"
+    )).filter(function(node){ return node && !node.closest(".legend") && textFromDom(node); });
+  }
+
+  function textNodeAtPoint(el, x, y){
+    const pad = 5;
+    const nodes = editableTextNodes(el);
+    let best = null;
+    let bestScore = Infinity;
+    nodes.forEach(function(node){
+      let r;
+      try { r = node.getBoundingClientRect(); } catch (e) { return; }
+      if (!r || r.width <= 0 || r.height <= 0){ return; }
+      const inside = x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
+      if (!inside){ return; }
+      const cx = (r.left + r.right) / 2;
+      const cy = (r.top + r.bottom) / 2;
+      const score = Math.abs(x - cx) + Math.abs(y - cy);
+      if (score < bestScore){ best = node; bestScore = score; }
+    });
+    return best;
+  }
+
+  function classifyEditableTextTarget(el, textEl){
+    if (!textEl || !el.contains(textEl) || textEl.closest(".legend")){ return null; }
+    const layout = el.layout || el._spBaseLayout || {};
+    const cls = textEl.getAttribute("class") || "";
+    const clickedText = textFromDom(textEl);
+    let key = "";
+    if (textEl.closest("g.annotation") || cls.indexOf("annotation") >= 0){ key = findAnnotationTextKey(el, textEl, clickedText); }
+    else if (cls.indexOf("gtitle") >= 0){ key = "title.text"; }
+    else if (cls.indexOf("xtitle") >= 0){ key = findAxisTextKey(layout, "x", clickedText); }
+    else if (cls.indexOf("ytitle") >= 0){ key = findAxisTextKey(layout, "y", clickedText); }
+    if (!key){ return null; }
+    return {
+      key: key,
+      text: layoutTextCandidate(layout, key) || clickedText,
+      defaultSize: textFontSize(layout, key, 14)
+    };
+  }
+
+  function findEditableTextTarget(el, node, ev){
+    if (!el || typeof LegendEdit === "undefined"){ return null; }
+    let textEl = node && node.closest ? node.closest("text") : null;
+    if (!textEl || !el.contains(textEl) || textEl.closest(".legend")){
+      textEl = ev ? textNodeAtPoint(el, ev.clientX, ev.clientY) : null;
+    }
+    return classifyEditableTextTarget(el, textEl);
+  }
+
+  function attachLegendTextEditor(el){
+    if (!el || el._spLegendTextEditorAttached){ return; }
+    el._spLegendTextEditorAttached = true;
+    el.addEventListener("click", function(ev){
+      if (!el._spLegendEditArmed){ return; }
+      const target = findEditableTextTarget(el, ev.target, ev);
+      if (!target){ return; }
+      ev.preventDefault();
+      ev.stopPropagation();
+      openTextEditor(el, target);
+    }, true);
+  }
+
   function plotlyConfig(fig){
     return {
       responsive: true,
       displaylogo: false,
       scrollZoom: false,
-      edits: { legendPosition: true, titleText: true, axisTitleText: true },
+      edits: { legendPosition: true, titleText: false, axisTitleText: false },
       modeBarButtonsToRemove: ["select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "toImage"]
     };
   }
@@ -2041,6 +2448,7 @@
     const layout = JSON.parse(JSON.stringify(fig.plotly.layout || {}));
     delete layout.width;
     stretchHorizontalDomains(layout);
+    normalizeLayoutTitles(layout);
     // Coordonnees affichees en dehors du graphe : on coupe l'info-bulle
     // flottante sur le graphe et on garde seulement les evenements de survol.
     layout.hovermode = layout.hovermode || "closest";
@@ -2084,6 +2492,19 @@
     // (contour pointille) ; tracer ensuite une zone cree l'encart. Robuste
     // (API Plotly officielle) et disponible aussi en mode comparaison.
     config.modeBarButtonsToAdd = [{
+      name: "publicationStyle",
+      title: "Style publication : appliquer police, grille, palette et tailles a toute la figure",
+      icon: { width: 16, height: 16, path: "M3 2 L13 2 L13 14 L3 14 Z M5 5 L11 5 M5 8 L11 8 M5 11 L9 11" },
+      click: function(gd){
+        gd._spInsetArmed = false;
+        gd._spMeasureArmed = false;
+        gd._spLegendEditArmed = false;
+        setInsetArmedFeedback(gd, coordsEl);
+        setMeasureArmedFeedback(gd);
+        setLegendEditFeedback(gd, coordsEl);
+        openPublicationEditor(gd);
+      }
+    }, {
       name: "zoomInset",
       title: "Zoom encart : cliquer pour armer, puis tracer une zone (re-clic = desarmer)",
       // Icone "picture-in-picture" : un cadre (rectangle exterieur evide par un
@@ -2136,6 +2557,7 @@
     el._spHasInset = false;
     if (el._spAutoY === undefined){ el._spAutoY = true; }   // auto-echelle Y activee par defaut
     Plotly.newPlot(el, data, layout, config);
+    attachLegendTextEditor(el);
     attachPlotNav(el);
     attachMeasure(el);
     if (el.on){

@@ -42,12 +42,20 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
   curseurs A et B. Lecture immédiate de Δx, Δy et **pente** ; si les deux
   points sont sur la même courbe, **aire sous la courbe** (trapèzes) et
   **min/max/moyenne** sur la plage [xA, xB]. Clic droit pour effacer.
-- **Legende editable** : bouton crayon dans la modebar pour modifier une entree
-  de legende (nom, couleur, style/epaisseur de trait, marqueur). Couleurs de
-  base en swatches, palettes avancees (Matplotlib, colorblind, Viridis, Plasma,
-  Cividis, gris) et application d'une palette au graphe courant. Les edits sont
-  persistants en vue liste et temporaires en comparaison ; la legende peut aussi
-  etre deplacee a la souris.
+- **Legende et textes editables** : bouton crayon dans la modebar. Cliquez une
+  entree de legende pour modifier nom, couleur, style/epaisseur de trait et
+  marqueur ; cliquez un titre, un titre de sous-graphe ou un label d'axe pour
+  modifier uniquement le texte, la taille de police, le gras et l'italique.
+  Quelques commandes LaTeX usuelles dans les textes (`$\delta$`, `$\Delta$`,
+  etc.) sont converties en symboles Unicode. Les edits sont persistants en vue
+  liste et temporaires en comparaison ; la legende peut aussi etre deplacee a la
+  souris.
+- **Style publication** : bouton dedie dans la modebar pour appliquer un preset
+  global a la figure (**Article**, **Presentation**, **Rapport** ou
+  **Colorblind**). Le choix est previsualise immediatement ; **Appliquer** le
+  persiste, **Fermer** restaure l'etat precedent. Les presets ajustent palette,
+  tailles de police, epaisseurs, marqueurs, grille et fond pour obtenir une
+  figure prete a exporter sans retoucher le script Python.
 - **Copier** : met l'image de la figure dans le presse-papiers (collable dans
   Word, un mail, un chat…).
 - **Export CSV** : bouton « CSV » sur les figures interactives — exporte les
@@ -165,10 +173,10 @@ ajuster dans le code pour récupérer l'interactivité.
   mode erreurs et en mode comparaison est **raster** (capture PNG haute résolution
   encapsulée), pas vectoriel — l'option vectorielle (svg2pdf + jsPDF) n'a pas été
   retenue. Le PDF vectoriel matplotlib reste disponible pour les figures simples.
-  Une figure dont la légende a été modifiée dans le panneau (couleur, nom,
-  style) est exportée en **PDF raster** haute résolution au lieu du PDF
-  vectoriel natif, car le rendu vectoriel matplotlib d'origine ne reflète pas
-  ces modifications. Les figures non modifiées restent en PDF vectoriel.
+  Une figure modifiee dans le panneau (legende, textes/titres, style
+  publication) est exportee en **PDF raster** haute resolution au lieu du PDF
+  vectoriel natif, car le rendu vectoriel matplotlib d'origine ne reflete pas
+  ces modifications. Les figures non modifiees restent en PDF vectoriel.
 - **Multi-fenêtres** : un fichier de port temporaire sert de repli au backend ;
   il est partagé (la dernière fenêtre démarrée « gagne »). L'injection des
   variables d'environnement reste correcte par fenêtre.

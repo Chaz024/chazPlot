@@ -40,6 +40,16 @@ check("compareLegendPrefix: fallback", function () {
   assert.strictEqual(LE.compareLegendPrefix("   ", "C"), "C");
   assert.strictEqual(LE.compareLegendPrefix("---", "D"), "D");
 });
+check("latexToPlainText: symboles usuels", function () {
+  assert.strictEqual(LE.latexToPlainText("Angle $\\delta$ et $\\Delta$"), "Angle \u03b4 et \u0394");
+  assert.strictEqual(LE.latexToPlainText("$\\mathrm{Re}$ <= $\\infty$"), "Re <= \u221e");
+});
+check("titleText et axisLayoutKey", function () {
+  assert.strictEqual(LE.titleText({ text: "Titre" }), "Titre");
+  assert.strictEqual(LE.titleText("Brut"), "Brut");
+  assert.strictEqual(LE.axisLayoutKey("x2", "x"), "xaxis2");
+  assert.strictEqual(LE.axisLayoutKey(undefined, "y"), "yaxis");
+});
 check("readTrace: valeurs", function () {
   const v = LE.readTrace({ name: "sin", line: { color: "#ff0000", dash: "dot", width: 3 }, marker: { symbol: "square", size: 9 } });
   assert.strictEqual(v.name, "sin");
@@ -75,6 +85,10 @@ check("buildRestyle: champs invalides omis", function () {
   assert.ok(!("line.width" in p));
   assert.strictEqual(p["marker.symbol"], "");
 });
+check("styledText: applique gras italique et latex", function () {
+  assert.strictEqual(LE.styledText("Angle $\\delta$", true, true), "<b><i>Angle \u03b4</i></b>");
+  assert.deepStrictEqual(LE.textStyle("<b><i>Titre</i></b>"), { text: "Titre", bold: true, italic: true });
+});
 check("applyPatch: cles pointees", function () {
   const trace = { name: "old", line: { width: 1 } };
   LE.applyPatch(trace, { name: "new", "line.color": "#abc", "marker.symbol": "circle" });
@@ -82,6 +96,12 @@ check("applyPatch: cles pointees", function () {
   assert.strictEqual(trace.line.color, "#abc");
   assert.strictEqual(trace.line.width, 1);
   assert.strictEqual(trace.marker.symbol, "circle");
+});
+check("applyPatch: annotations indexees", function () {
+  const layout = { annotations: [{ text: "old", font: { size: 10 } }] };
+  LE.applyPatch(layout, { "annotations[0].text": "new", "annotations[0].font.size": 16 });
+  assert.strictEqual(layout.annotations[0].text, "new");
+  assert.strictEqual(layout.annotations[0].font.size, 16);
 });
 check("hsvToHex: primaires", function () {
   assert.strictEqual(LE.hsvToHex(0, 1, 1), "#ff0000");

@@ -22,8 +22,9 @@ const requiredIds = [
   "errorWarn", "errorPanel", "errorApply", "errorHide", "errorReset", "errorSummary", "compareBody",
   "keepSelToggle",
   "compareSave", "compareCopy", "compareCsv", "compareBundle",
-  "legendEditor", "leName", "leColor", "leDash", "leWidth",
-  "leSymbol", "leMarkerSize", "leBaseColors", "leAdvancedColors",
+  "publicationEditor", "pubPreset", "pubApply", "pubClose",
+  "legendEditor", "leName", "leTextValue", "leFontSize", "leBold", "leItalic",
+  "leColor", "leDash", "leWidth", "leSymbol", "leMarkerSize", "leBaseColors", "leAdvancedColors",
   "leSvSquare", "leHueStrip", "leHex", "leApply", "leClose",
 ];
 

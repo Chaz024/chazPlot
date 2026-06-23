@@ -135,6 +135,47 @@
     return t.length > 18 ? t.slice(0, 15) + "..." : t;
   }
 
+
+  const TEX_SYMBOLS = {
+    alpha: "\u03b1", beta: "\u03b2", gamma: "\u03b3", Gamma: "\u0393", delta: "\u03b4", Delta: "\u0394",
+    epsilon: "\u03b5", varepsilon: "\u03b5", zeta: "\u03b6", eta: "\u03b7", theta: "\u03b8", Theta: "\u0398",
+    vartheta: "\u03d1", iota: "\u03b9", kappa: "\u03ba", lambda: "\u03bb", Lambda: "\u039b",
+    mu: "\u03bc", nu: "\u03bd", xi: "\u03be", Xi: "\u039e", pi: "\u03c0", Pi: "\u03a0", rho: "\u03c1",
+    sigma: "\u03c3", Sigma: "\u03a3", tau: "\u03c4", upsilon: "\u03c5", phi: "\u03c6", varphi: "\u03d5",
+    Phi: "\u03a6", chi: "\u03c7", psi: "\u03c8", Psi: "\u03a8", omega: "\u03c9", Omega: "\u03a9",
+    pm: "\u00b1", times: "\u00d7", cdot: "\u00b7", infty: "\u221e", le: "\u2264", ge: "\u2265",
+    neq: "\u2260", approx: "\u2248", partial: "\u2202", nabla: "\u2207", degree: "\u00b0"
+  };
+
+  function latexToPlainText(text) {
+    let out = String(text == null ? "" : text);
+    out = out.replace(/\$\$(.*?)\$\$/g, "$1").replace(/\$(.*?)\$/g, "$1");
+    out = out.replace(/\\(?:mathrm|text)\{([^{}]*)\}/g, "$1");
+    out = out.replace(/\\([A-Za-z]+)/g, function (m, name) {
+      return TEX_SYMBOLS[name] || m;
+    });
+    out = out.replace(/[{}]/g, "");
+    return out;
+  }
+
+  function titleText(title) {
+    if (title && typeof title === "object" && title.text != null) {
+      return String(title.text);
+    }
+    if (title != null && typeof title !== "object") {
+      return String(title);
+    }
+    return "";
+  }
+
+  function axisLayoutKey(axisRef, letter) {
+    const base = letter || "x";
+    const ref = String(axisRef || base);
+    if (ref === base) { return base + "axis"; }
+    if (ref.charAt(0) === base) { return base + "axis" + ref.slice(1); }
+    return base + "axis";
+  }
+
   function readTrace(trace) {
     const t = trace || {};
     const line = t.line || {};
@@ -166,16 +207,51 @@
     return patch;
   }
 
+
+  function stripTextMarkup(text) {
+    return String(text == null ? "" : text).replace(/<\/?(?:b|i)>/gi, "");
+  }
+
+  function textStyle(text) {
+    const raw = String(text == null ? "" : text);
+    return {
+      text: stripTextMarkup(raw),
+      bold: /<b>/i.test(raw),
+      italic: /<i>/i.test(raw)
+    };
+  }
+
+  function styledText(text, bold, italic) {
+    let out = latexToPlainText(stripTextMarkup(text));
+    if (italic) { out = "<i>" + out + "</i>"; }
+    if (bold) { out = "<b>" + out + "</b>"; }
+    return out;
+  }
+
+  function patchParts(key) {
+    const out = [];
+    String(key || "").split(".").forEach(function(part) {
+      const re = /([^\[\]]+)|\[(\d+)\]/g;
+      let m;
+      while ((m = re.exec(part)) !== null) {
+        out.push(m[1] !== undefined ? m[1] : Number(m[2]));
+      }
+    });
+    return out;
+  }
+
   function applyPatch(trace, patch) {
     if (!trace || !patch) { return trace; }
     Object.keys(patch).forEach(function (key) {
-      const parts = key.split(".");
+      const parts = patchParts(key);
       let target = trace;
       for (let i = 0; i < parts.length - 1; i++) {
-        if (target[parts[i]] == null || typeof target[parts[i]] !== "object") {
-          target[parts[i]] = {};
+        const part = parts[i];
+        const next = parts[i + 1];
+        if (target[part] == null || typeof target[part] !== "object") {
+          target[part] = typeof next === "number" ? [] : {};
         }
-        target = target[parts[i]];
+        target = target[part];
       }
       target[parts[parts.length - 1]] = patch[key];
     });
@@ -194,6 +270,12 @@
     hsvToHex: hsvToHex,
     hexToHsv: hexToHsv,
     compareLegendPrefix: compareLegendPrefix,
+    latexToPlainText: latexToPlainText,
+    titleText: titleText,
+    axisLayoutKey: axisLayoutKey,
+    stripTextMarkup: stripTextMarkup,
+    textStyle: textStyle,
+    styledText: styledText,
     readTrace: readTrace,
     buildRestyle: buildRestyle,
     applyPatch: applyPatch
