@@ -30,6 +30,10 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
   barre de navigation, vitesse 0.25×–4×.
 - **Agrandir** : overlay plein panneau qui re-rend en vectoriel (net à toute
   taille), avec redimensionnement automatique.
+- **Taille automatique en vue liste** : les graphes gardent une largeur
+  confortable selon la place disponible, le ratio de la figure et la hauteur de
+  fenetre. En plein ecran, ils ne deviennent plus demesures ; en panneau etroit,
+  ils remplissent naturellement la carte.
 - **Zoom encarté** : armez le bouton dédié de la modebar puis tracez une zone —
   elle s'affiche en encart sur le graphe original (en plus du zoom Plotly
   standard). L'encart se **déplace** (corps) et se **redimensionne** (poignées de
@@ -38,6 +42,12 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
   curseurs A et B. Lecture immédiate de Δx, Δy et **pente** ; si les deux
   points sont sur la même courbe, **aire sous la courbe** (trapèzes) et
   **min/max/moyenne** sur la plage [xA, xB]. Clic droit pour effacer.
+- **Legende editable** : bouton crayon dans la modebar pour modifier une entree
+  de legende (nom, couleur, style/epaisseur de trait, marqueur). Couleurs de
+  base en swatches, palettes avancees (Matplotlib, colorblind, Viridis, Plasma,
+  Cividis, gris) et application d'une palette au graphe courant. Les edits sont
+  persistants en vue liste et temporaires en comparaison ; la legende peut aussi
+  etre deplacee a la souris.
 - **Copier** : met l'image de la figure dans le presse-papiers (collable dans
   Word, un mail, un chat…).
 - **Export CSV** : bouton « CSV » sur les figures interactives — exporte les
@@ -53,6 +63,9 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
   `figure.tex` (`\includegraphics` sans extension : pdflatex prend le PDF).
 - **Comparaison** : sélection de plusieurs graphes pour les superposer ou les
   afficher côte à côte.
+  - **Legendes explicites** : en superposition, les traces sont prefixees par le
+    titre de leur figure source, plus lisible que A/B quand plusieurs graphes
+    sont compares.
   - **Zoom synchronisé** en côte à côte : zoomer/réinitialiser un graphe applique
     la même plage d'axes aux autres.
   - **Sous-graphes préservés** : des figures de même structure multi-sous-graphes
@@ -82,14 +95,14 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
 
 ### Paquet .vsix (recommandé)
 ```bash
-npx @vscode/vsce package          # produit chaz-plots-0.8.0.vsix
-code --install-extension chaz-plots-0.8.0.vsix
+npx @vscode/vsce package          # produit chaz-plots-0.9.0.vsix
+code --install-extension chaz-plots-0.9.0.vsix
 ```
 
 ### Sans droits administrateur (Windows)
 Aucune compilation, aucun `npm install` (extension en JavaScript pur) :
 1. Copiez le dossier dans
-   `%USERPROFILE%\.vscode\extensions\hugo.chaz-plots-0.8.0`.
+   `%USERPROFILE%\.vscode\extensions\hugo.chaz-plots-0.9.0`.
 2. Rechargez VS Code (`Ctrl+Shift+P` → « Reload Window »).
 3. Ouvrez un **nouveau terminal** (les variables d'environnement ne sont
    injectées que dans les terminaux créés après l'activation).
@@ -152,6 +165,10 @@ ajuster dans le code pour récupérer l'interactivité.
   mode erreurs et en mode comparaison est **raster** (capture PNG haute résolution
   encapsulée), pas vectoriel — l'option vectorielle (svg2pdf + jsPDF) n'a pas été
   retenue. Le PDF vectoriel matplotlib reste disponible pour les figures simples.
+  Une figure dont la légende a été modifiée dans le panneau (couleur, nom,
+  style) est exportée en **PDF raster** haute résolution au lieu du PDF
+  vectoriel natif, car le rendu vectoriel matplotlib d'origine ne reflète pas
+  ces modifications. Les figures non modifiées restent en PDF vectoriel.
 - **Multi-fenêtres** : un fichier de port temporaire sert de repli au backend ;
   il est partagé (la dernière fenêtre démarrée « gagne »). L'injection des
   variables d'environnement reste correcte par fenêtre.
@@ -177,6 +194,7 @@ chaz-plots/
 │   ├── compare_util.js                  zoom sync + sous-graphes (pur)
 │   ├── bundle_meta.js                   bundle publication (pur)
 │   ├── pdf_export.js                    génération PDF raster webview (pur)
+│   ├── legend_edit.js                  edition/prefixes de legende (pur)
 │   └── figure_filter.js                 recherche + tri des figures (pur)
 ├── python/
 │   ├── vscode_spyder_plots_backend.py   backend matplotlib (module://)
@@ -209,9 +227,21 @@ node test/test_bundle_meta.js    # bundle publication (metadata.json, figure.tex
 node test/test_figure_filter.js  # recherche (provenance) + tri des figures
 node test/test_inset_layout.js   # placement de l'encart de zoom
 node test/test_pdf_export.js     # génération PDF raster webview
+node test/test_legend_edit.js    # edition/prefixes de legende
 node test/check_panel_html.js    # garde-fou structurel du webview
-node --check extension.js storage.js
+node --check extension.js storage.js media/legend_edit.js
 ```
+
+## Nouveautes v0.9.0
+
+- **Taille automatique de la vue liste** : les graphes se recalibrent selon la
+  largeur disponible, la hauteur de fenetre et le ratio matplotlib, sans curseur
+  manuel obligatoire.
+- **Legende de comparaison plus lisible** : les traces superposees sont prefixees
+  par le titre de la figure source, avec troncature propre si le titre est long.
+- **Legende deplacable et editable** : bouton crayon de modebar pour modifier nom,
+  couleur, trait, epaisseur et marqueur ; choix rapide par couleurs de base ou
+  palettes avancees ; persistance en vue liste, edition de session en comparaison.
 
 ## Nouveautés v0.8.0
 
