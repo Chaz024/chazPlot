@@ -41,7 +41,12 @@ def _register_vendored_styles():
         for name in ("science", "ieee", "nature"):
             path = os.path.join(styles_dir, name + ".mplstyle")
             try:
-                params = mstyle.core._rc_params_in_file(path)
+                import matplotlib as _mpl
+                try:
+                    params = _mpl.rc_params_from_file(
+                        path, use_default_template=False)
+                except AttributeError:
+                    params = mstyle.core._rc_params_in_file(path)
                 mstyle.core.library[name] = params
             except Exception:
                 pass  # un style manquant/illisible ne bloque pas les autres

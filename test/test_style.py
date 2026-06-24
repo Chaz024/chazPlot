@@ -16,7 +16,10 @@ STYLES_DIR = os.path.join(os.path.dirname(__file__), "..", "python", "styles")
 class VendoredFilesTests(unittest.TestCase):
     def _load(self, name):
         path = os.path.join(STYLES_DIR, name + ".mplstyle")
-        return mstyle.core._rc_params_in_file(path)
+        try:
+            return matplotlib.rc_params_from_file(path, use_default_template=False)
+        except AttributeError:
+            return mstyle.core._rc_params_in_file(path)
 
     def test_science_loads_key_params(self):
         params = self._load("science")
@@ -49,7 +52,6 @@ class RegisterTests(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
         import vscode_spyder_plots_backend  # noqa: F401 — import = enregistrement
-        self.matplotlib = matplotlib
 
     def test_names_registered(self):
         for name in ("science", "ieee", "nature"):
