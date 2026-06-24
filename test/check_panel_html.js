@@ -16,13 +16,13 @@ const placeholders = [
 ];
 const requiredIds = [
   "count", "searchInput", "compareStatus", "compareSide", "compareStack",
-  "fitToggle", "sortSelect", "saveAll", "deleteAll", "list", "empty", "overlay", "ovTitle",
+  "fitToggle", "sortSelect", "pasteFig", "saveAll", "deleteAll", "list", "empty", "overlay", "ovTitle",
   "ovCoords", "ovClose", "ovBody", "compareOverlay", "compareTitle",
   "compareOpacityWrap", "compareOpacity", "compareClose", "errorToggle",
   "errorWarn", "errorPanel", "errorApply", "errorHide", "errorReset", "errorSummary", "compareBody",
   "keepSelToggle",
   "compareSave", "compareCopy", "compareCsv", "compareBundle",
-  "publicationEditor", "pubPreset", "pubScienceModeWrap", "pubScienceMode", "pubApply", "pubClose",
+  "publicationEditor", "pubPreset", "pubApply", "pubClose",
   "annotationEditor", "annText", "annTextColor", "annFontSize", "annBold", "annArrowColor",
   "annShowArrow", "annTextColors", "annArrowColors", "annApply", "annDelete", "annClose",
   "legendEditor", "leName", "leTextValue", "leFontSize", "leBold", "leItalic",

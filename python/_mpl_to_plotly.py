@@ -22,6 +22,8 @@
 # retombe sur le rendu SVG. Aucune dependance hors matplotlib.
 # ============================================================
 
+import re
+
 import numpy as np
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
@@ -318,12 +320,55 @@ def _axis_range(ax, which):
     return [float(lo), float(hi)]
 
 
+_MATHTEXT_CMD = re.compile(
+    r"\\(?:mathdefault|mathrm|mathit|mathsf|mathbf|mathnormal|text)\s*\{([^{}]*)\}")
+
+
+def _clean_mathtext(text):
+    """Convertit un libelle matplotlib mathtext en texte basique : Plotly ne rend
+    pas le LaTeX, donc `$\\mathdefault{0.5}$` ou `$\\it{x}$` s'afficheraient
+    litteralement. Deballe `\\mathdefault{..}`/`\\mathrm{..}`/`\\text{..}`,
+    retire les `$`, les commandes de style (`\\it`, `\\bf`...) et les accolades.
+    N'agit que sur les textes contenant `$` ou `\\` (idempotent)."""
+    if not isinstance(text, str) or ("$" not in text and "\\" not in text):
+        return text
+    out = text
+    for _ in range(4):  # plusieurs passes pour les commandes imbriquees
+        new = _MATHTEXT_CMD.sub(r"\1", out)
+        if new == out:
+            break
+        out = new
+    out = re.sub(r"\\(?:it|bf|rm|sf|tt|cal|displaystyle)\b", "", out)
+    out = out.replace("\\,", " ").replace("\\;", " ").replace("\\!", "").replace("\\ ", " ")
+    out = re.sub(r"\\([a-zA-Z]+)", r"\1", out)  # \alpha -> alpha (ecriture basique)
+    out = out.replace("$", "").replace("{", "").replace("}", "")
+    return out.strip()
+
+
+def _clean_texts_inplace(obj):
+    """Nettoie en place tous les libelles (cles `text`, listes `ticktext`) d'un
+    spec Plotly via `_clean_mathtext`. Applique aux figures science pour garder
+    un apercu interactif en ecriture basique."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "text" and isinstance(value, str):
+                obj[key] = _clean_mathtext(value)
+            elif key == "ticktext" and isinstance(value, list):
+                obj[key] = [_clean_mathtext(item) if isinstance(item, str) else item
+                            for item in value]
+            else:
+                _clean_texts_inplace(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            _clean_texts_inplace(item)
+
+
 def _custom_ticks(axis):
     """Si l'axe porte des etiquettes textuelles (barres categorielles,
     set_xticks avec labels), retourne (tickvals, ticktext), sinon None."""
     try:
         locs = list(axis.get_ticklocs())
-        labels = [t.get_text() for t in axis.get_ticklabels()]
+        labels = [_clean_mathtext(t.get_text()) for t in axis.get_ticklabels()]
     except Exception:
         return None
     if len(locs) == 0 or len(locs) != len(labels):
@@ -1680,6 +1725,10 @@ def convert_figure_with_reason(fig):
     if len(axes_list) == 0:
         return None, _reason("no_axes", "Aucun axe a convertir")
 
+    # Figure construite sous un style science (science/ieee/nature) : on garde
+    # l'apercu Plotly basique au lieu de mimer le style des axes matplotlib.
+    neutral_axes = getattr(fig, "_sp_science_style", None) is not None
+
     data = []
     layout = {
         "margin": {"l": 60, "r": 30, "t": 50, "b": 50},
@@ -1957,8 +2006,12 @@ def convert_figure_with_reason(fig):
         }
         # Style reel des axes matplotlib (direction des ticks, minor ticks,
         # spines/mirror, serif...) -> apercu Plotly fidele au rendu produit.
-        layout[axis_x].update(_axis_style(ax, "x"))
-        layout[axis_y].update(_axis_style(ax, "y"))
+        # MAIS pas pour les figures "science" : l'apercu interactif reste
+        # volontairement basique (ticks externes, sans-serif, sans minor/mirror),
+        # le rendu propre etant reserve a l'export matplotlib.
+        if not neutral_axes:
+            layout[axis_x].update(_axis_style(ax, "x"))
+            layout[axis_y].update(_axis_style(ax, "y"))
         if ax.get_xscale() == "log":
             layout[axis_x]["type"] = "log"
         if ax.get_yscale() == "log":
@@ -2010,6 +2063,12 @@ def convert_figure_with_reason(fig):
     # entre les mailles) -> on retombe sur le SVG plutot qu'un graphe vide.
     if len(data) == 0:
         return None, _reason("empty", "Aucune trace exploitable produite")
+
+    # Figure science : ecriture basique cote Plotly (titres, labels d'axes,
+    # annotations, ticktext) -> pas de `\mathdefault{}`/`\it` litteral.
+    if neutral_axes:
+        _clean_texts_inplace(layout)
+        _clean_texts_inplace(data)
 
     # hauteur d'affichage derivee de la taille de la figure
     size = fig.get_size_inches()

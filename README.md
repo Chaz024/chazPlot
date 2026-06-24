@@ -177,8 +177,13 @@ plt.plot(x, y); plt.show()                    # figure normale
 
 Les **exports** (PNG/SVG/PDF) d'une figure produite ainsi sont du vrai
 SciencePlots, identiques aux images de référence. L'**aperçu interactif** Plotly
-en est une approximation ; le preset « science » de l'éditeur publication
-rapproche cet aperçu et peut s'appliquer à n'importe quelle figure déjà affichée.
+reste volontairement **brut** (pas d'approximation du style science) — il sert à
+explorer/zoomer, pas à publier.
+
+Une figure tracée sous `plt.style.context('science')` (ou `ieee`/`nature`) est
+**détectée automatiquement** : son bouton d'export bascule sur « Export :
+matplotlib » et la sauvegarde PNG/SVG/PDF puise dans le rendu matplotlib propre
+plutôt que dans le rendu Plotly. Le bouton se clique pour forcer l'un ou l'autre.
 
 > Note : `text.usetex` est forcé à `False` (pas de dépendance LaTeX) ; les polices
 > serif passent par mathtext. La seule différence visible avec les images de

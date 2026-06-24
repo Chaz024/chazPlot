@@ -165,6 +165,41 @@ function writePortFile(port) {
   }
 }
 
+// ------------------------------------------------------------
+// Presse-papier de figure (transfert entre fenetres VS Code).
+// On passe par un fichier tmp partage (comme le fichier de port) plutot que par
+// le presse-papier systeme : la figure est un JSON volumineux qui polluerait le
+// presse-papier texte/image. Le bouton « Copier » d'une figure y ecrit son JSON ;
+// le bouton « Coller » du panneau le relit dans la fenetre cible.
+function clipboardFilePath() {
+  return path.join(require("os").tmpdir(), "chaz-plots-clipboard.json");
+}
+
+function copyFigureData(id) {
+  const fig = figures.find(function (f) { return f.id === id; });
+  if (!fig) { return; }
+  try {
+    fs.writeFileSync(clipboardFilePath(), JSON.stringify(fig), "utf8");
+  } catch (e) {
+    // best-effort : la copie image (presse-papier) reste fonctionnelle
+  }
+}
+
+function pasteFigure() {
+  let data = null;
+  try {
+    data = JSON.parse(fs.readFileSync(clipboardFilePath(), "utf8"));
+  } catch (e) {
+    vscode.window.showWarningMessage(
+      "Chaz Plots : aucune figure a coller. Cliquez d'abord « Copier » sur une figure."
+    );
+    return;
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) { return; }
+  // addFigure attribue un nouvel id et ajoute la figure a la fenetre courante.
+  addFigure(data);
+}
+
 function injectEnvironment(port) {
   const cfg = vscode.workspace.getConfiguration("chazPlots");
   const pyDir = path.join(extContext.extensionPath, "python");
@@ -197,6 +232,10 @@ function addFigure(data) {
     frames: hasFrames ? data.frames : null,
     interval: hasFrames ? Number(data.interval) || 100 : null,
     render: data.render && typeof data.render === "object" ? data.render : null,
+    // Figure construite sous un style science : par defaut l'export puise dans
+    // les assets matplotlib (propres) plutot que dans le rendu Plotly. Toggle
+    // override cote webview (message setExportSource).
+    sciencePlot: data.sciencePlot === true,
     provenance: data.provenance && typeof data.provenance === "object" ? data.provenance : null,
     title: data.title ? String(data.title) : "Figure " + String(nextId),
     tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
@@ -270,6 +309,16 @@ function updateFigureLayout(id, patch) {
   if (!fig.plotly.layout) { fig.plotly.layout = {}; }
   LegendEdit.applyPatch(fig.plotly.layout, patch);
   fig.edited = true;   // PDF natif perime -> export raster (comme l'edition de legende)
+  try { storage.save(fig); } catch (e) { /* best-effort */ }
+}
+
+// Override du toggle "export science" (depuis le webview) : choisit si l'export
+// d'une figure plotly puise dans les assets matplotlib propres ou dans le rendu
+// Plotly. Persiste le choix (storage serialise l'objet entier).
+function setExportSource(id, sciencePlot) {
+  const fig = figures.find(function (f) { return f.id === id; });
+  if (!fig) { return; }
+  fig.sciencePlot = sciencePlot === true;
   try { storage.save(fig); } catch (e) { /* best-effort */ }
 }
 
@@ -414,7 +463,13 @@ async function saveOne(id, frameIndex) {
     : figures.find(function (f) { return f.id === id; });
   if (!fig) { return; }
 
-  if (fig.plotly && !fig.frames) {
+  // Figure science : l'export puise dans les assets matplotlib (png/svg/pdf deja
+  // propres), pas dans le rendu Plotly. Sauf si la figure a ete editee dans le
+  // webview (assets perimes) -> on repasse par l'export Plotly.
+  const matplotlibExport = !!(fig.plotly && !fig.frames && fig.sciencePlot
+    && !fig.edited && (fig.png || fig.svg || fig.pdf));
+
+  if (fig.plotly && !fig.frames && !matplotlibExport) {
     const options = await plotlyExportOptions(fig);
     if (!options) { return; }
     const isPdf = options.format === "pdf";
@@ -647,6 +702,9 @@ function setupPanel(p) {
       else if (msg.level === "error") { vscode.window.showErrorMessage(text); }
       else { vscode.window.showInformationMessage(text); }
     }
+    else if (msg.type === "setExportSource") { setExportSource(msg.id, msg.sciencePlot); }
+    else if (msg.type === "copyFigureData") { copyFigureData(msg.id); }
+    else if (msg.type === "pasteFigure") { pasteFigure(); }
     else if (msg.type === "updateTags") { updateTags(msg.id, msg.tags); }
     else if (msg.type === "updateFigure") { updateFigureTrace(msg.id, msg.traceIndex, msg.patch); }
     else if (msg.type === "updateFigureLayout") { updateFigureLayout(msg.id, msg.patch); }

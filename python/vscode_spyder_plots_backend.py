@@ -58,6 +58,102 @@ def _register_vendored_styles():
 _WARNED = False
 _SVG_MAX_BYTES = 8 * 1024 * 1024  # au-dela : fallback PNG pour l'affichage
 
+
+# ------------------------------------------------------------
+# Detection du style "science" actif a la construction d'une figure
+# ------------------------------------------------------------
+# Une figure construite sous `plt.style.context('science')` (ou ieee/nature) est
+# rendue proprement par matplotlib (police serif, ticks internes...). On l'estampille
+# pour que l'extension propose, par defaut, un export depuis les assets matplotlib
+# plutot que depuis l'approximation Plotly. Le Plotly live, lui, reste brut.
+_SCIENCE_STYLE_NAMES = ("science", "ieee", "nature")
+_STYLE_CONTEXT_STACK = []   # piles de noms de styles des `with plt.style.context(...)`
+_STYLE_AMBIENT = []         # dernier `plt.style.use(...)` (hors 'default')
+
+
+def _style_names_from_arg(style):
+    """Aplatit l'argument de style.use/context en liste de noms (str).
+    Ignore dicts/Path (styles anonymes : non pertinents pour la detection)."""
+    if isinstance(style, (list, tuple)):
+        names = []
+        for item in style:
+            names.extend(_style_names_from_arg(item))
+        return names
+    if isinstance(style, str):
+        return [style]
+    return []
+
+
+def _active_science_style():
+    """Nom du style science actif (science/ieee/nature) au moment de l'appel,
+    ou None."""
+    names = list(_STYLE_AMBIENT)
+    for layer in _STYLE_CONTEXT_STACK:
+        names.extend(layer)
+    science = [n for n in names if n in _SCIENCE_STYLE_NAMES]
+    return science[-1] if science else None
+
+
+def _install_style_hook():
+    """Trace le style science actif a la construction des figures.
+
+    - patch `matplotlib.style.context` : empile/depile les noms de styles ;
+    - patch `matplotlib.style.use` : retient le dernier style ambiant ;
+    - patch `Figure.__init__` : estampille la figure (`_sp_science_style`) avec le
+      style science actif a sa creation.
+    Best-effort : tout echec laisse le run intact (detection desactivee)."""
+    try:
+        import contextlib
+        import matplotlib.style as mstyle
+        import matplotlib.figure as mfigure
+    except Exception:
+        return
+
+    if not getattr(mstyle, "_spyder_plots_style_hooked", False):
+        orig_context = mstyle.context
+        orig_use = mstyle.use
+
+        @contextlib.contextmanager
+        def patched_context(style, after_reset=False):
+            names = _style_names_from_arg(style)
+            _STYLE_CONTEXT_STACK.append(names)
+            try:
+                with orig_context(style, after_reset=after_reset):
+                    yield
+            finally:
+                try:
+                    _STYLE_CONTEXT_STACK.remove(names)
+                except ValueError:
+                    pass
+
+        def patched_use(style):
+            result = orig_use(style)
+            names = _style_names_from_arg(style)
+            if any(name == "default" for name in names):
+                _STYLE_AMBIENT[:] = []
+            else:
+                _STYLE_AMBIENT[:] = names
+            return result
+
+        mstyle.context = patched_context
+        mstyle.use = patched_use
+        mstyle._spyder_plots_style_hooked = True
+
+    if not getattr(mfigure.Figure, "_spyder_plots_style_hooked", False):
+        orig_init = mfigure.Figure.__init__
+
+        def patched_fig_init(self, *args, **kwargs):
+            orig_init(self, *args, **kwargs)
+            try:
+                style = _active_science_style()
+                if style is not None:
+                    self._sp_science_style = style
+            except Exception:
+                pass
+
+        mfigure.Figure.__init__ = patched_fig_init
+        mfigure.Figure._spyder_plots_style_hooked = True
+
 # Animations vivantes, enregistrees a leur creation (cf. _install_animation_hook)
 _ANIMATIONS = []
 def _anim_max_frames():
@@ -482,6 +578,11 @@ class _BackendVSCodeSpyderPlots(_Backend):
 
             render = _render_diag(plotly_spec, svg_bytes, plotly_reason, svg_too_big)
 
+            # Figure construite sous un style science (science/ieee/nature) ?
+            # Les assets matplotlib ci-dessus sont alors deja propres : on le
+            # signale pour que l'export par defaut les privilegie.
+            science_style = getattr(figure, "_sp_science_style", None)
+
             # PGF/TikZ is intentionally not generated during capture.
             # It is fragile on complex matplotlib artists, while PNG/SVG export
             # is reliable and can be included from LaTeX with \includegraphics.
@@ -493,6 +594,8 @@ class _BackendVSCodeSpyderPlots(_Backend):
                 "png": base64.b64encode(png_bytes).decode("ascii") if png_bytes is not None else None,
                 "pdf": base64.b64encode(pdf_bytes).decode("ascii") if pdf_bytes is not None else None,
                 "render": render,
+                "sciencePlot": science_style is not None,
+                "scienceStyle": science_style,
                 "provenance": provenance,
             })
 
@@ -503,6 +606,10 @@ class _BackendVSCodeSpyderPlots(_Backend):
 # Enregistre les styles SciencePlots vendorises des l'import du backend, pour
 # que `with plt.style.context('science')` fonctionne sans installer scienceplots.
 _register_vendored_styles()
+
+# Trace le style science actif a la construction des figures (estampillage), des
+# l'import, donc avant que l'utilisateur ne construise ses figures.
+_install_style_hook()
 
 # Hook installe des l'import du backend (et re-tente a chaque show()).
 _install_animation_hook()
