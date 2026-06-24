@@ -340,6 +340,138 @@ def _custom_ticks(axis):
     return None
 
 
+def _serif_family(axis):
+    """Police a emettre cote Plotly UNIQUEMENT si la figure utilise une serif
+    (style type SciencePlots) ; pour le sans-serif par defaut, on retourne None
+    afin de ne pas modifier le rendu des figures normales."""
+    try:
+        import matplotlib
+        fam = matplotlib.rcParams.get("font.family", ["sans-serif"])
+        generic = (fam[0] if isinstance(fam, (list, tuple)) and fam else fam)
+    except Exception:
+        generic = "sans-serif"
+    if generic != "serif":
+        return None
+    name = None
+    try:
+        labels = axis.get_ticklabels()
+        if labels:
+            name = labels[0].get_fontname()
+    except Exception:
+        name = None
+    return (name + ", serif") if name else "serif"
+
+
+def _axis_style(ax, which):
+    """Lit le style reel des axes matplotlib (direction des ticks, longueur,
+    epaisseur, couleur, spines/mirror, minor ticks, police serif) et le traduit
+    en proprietes Plotly. Permet a l'apercu Plotly de coller au rendu produit
+    (ex. style 'science'). Best-effort : toute lecture qui echoue est ignoree."""
+    axis = ax.xaxis if which == "x" else ax.yaxis
+    spines = getattr(ax, "spines", {})
+    if which == "x":
+        primary, secondary = spines.get("bottom"), spines.get("top")
+    else:
+        primary, secondary = spines.get("left"), spines.get("right")
+    out = {}
+
+    try:
+        major = axis.get_tick_params(which="major") or {}
+    except Exception:
+        major = {}
+
+    tickdir = major.get("direction")
+    if tickdir is None:
+        try:
+            tickdir = axis.majorTicks[0]._tickdir
+        except Exception:
+            tickdir = "out"
+    out["ticks"] = "inside" if tickdir in ("in", "inout") else "outside"
+
+    # Longueur/epaisseur reelles lues sur la ligne de tick (refletent le style
+    # qu'il vienne de tick_params explicite OU des rcParams, ex. 'science').
+    major_line = None
+    try:
+        major_line = axis.get_major_ticks()[0].tick1line
+    except Exception:
+        major_line = None
+    if major_line is not None:
+        try:
+            out["ticklen"] = float(major_line.get_markersize())
+        except Exception:
+            pass
+        try:
+            out["tickwidth"] = float(major_line.get_markeredgewidth())
+        except Exception:
+            pass
+
+    spine_width = None
+    if primary is not None:
+        try:
+            spine_width = float(primary.get_linewidth())
+        except Exception:
+            spine_width = None
+    if spine_width is not None:
+        out["linewidth"] = spine_width
+
+    if major.get("color") is not None:
+        try:
+            out["tickcolor"] = mcolors.to_hex(major["color"])
+        except Exception:
+            pass
+    if primary is not None:
+        try:
+            out["linecolor"] = mcolors.to_hex(primary.get_edgecolor())
+        except Exception:
+            pass
+
+    # ticks sur le cote oppose (xtick.top / ytick.right) -> mirror "ticks"
+    sec_visible = bool(secondary.get_visible()) if secondary is not None else False
+    sec_key = "top" if which == "x" else "right"
+    sec_tick_on = bool(major.get(sec_key, False))
+    if sec_visible and sec_tick_on:
+        out["mirror"] = "ticks"
+    elif sec_visible:
+        out["mirror"] = True
+    else:
+        out["mirror"] = False
+
+    try:
+        from matplotlib.ticker import NullLocator
+        has_minor = not isinstance(axis.get_minor_locator(), NullLocator)
+    except Exception:
+        has_minor = False
+    if has_minor:
+        mp = {}
+        try:
+            mp = axis.get_tick_params(which="minor") or {}
+        except Exception:
+            mp = {}
+        minor_dir = mp.get("direction", tickdir)
+        minor = {
+            "ticks": "inside" if minor_dir in ("in", "inout") else "outside",
+            "showgrid": False,
+        }
+        try:
+            minor_line = axis.get_minor_ticks()[0].tick1line
+            minor["ticklen"] = float(minor_line.get_markersize())
+            minor["tickwidth"] = float(minor_line.get_markeredgewidth())
+        except Exception:
+            pass
+        if mp.get("color") is not None:
+            try:
+                minor["tickcolor"] = mcolors.to_hex(mp["color"])
+            except Exception:
+                pass
+        out["minor"] = minor
+
+    family = _serif_family(axis)
+    if family:
+        out["tickfont"] = {"family": family}
+
+    return out
+
+
 # ------------------------------------------------------------
 # Conversion des artistes
 # ------------------------------------------------------------
@@ -1823,6 +1955,10 @@ def convert_figure_with_reason(fig):
             "mirror": True,
             "ticks": "outside",
         }
+        # Style reel des axes matplotlib (direction des ticks, minor ticks,
+        # spines/mirror, serif...) -> apercu Plotly fidele au rendu produit.
+        layout[axis_x].update(_axis_style(ax, "x"))
+        layout[axis_y].update(_axis_style(ax, "y"))
         if ax.get_xscale() == "log":
             layout[axis_x]["type"] = "log"
         if ax.get_yscale() == "log":

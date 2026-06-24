@@ -344,5 +344,56 @@ class ConvertColorbarTests(unittest.TestCase):
         self.assertNotIn("colorbar", hm)
 
 
+class ConvertAxisStyleTests(unittest.TestCase):
+    """L'apercu Plotly doit refleter le style reel des axes matplotlib
+    (direction des ticks, minor ticks, mirror, epaisseur), pour coller au
+    rendu produit (ex. style 'science')."""
+
+    def tearDown(self):
+        plt.close("all")
+
+    def test_inside_ticks_and_thin_spines(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [3, 4, 5])
+        ax.tick_params(direction="in", length=3, width=0.5)
+        for s in ax.spines.values():
+            s.set_linewidth(0.5)
+        spec = convert_figure(fig)
+        xa = spec["layout"]["xaxis"]
+        self.assertEqual(xa["ticks"], "inside")
+        self.assertAlmostEqual(xa["ticklen"], 3.0)
+        self.assertAlmostEqual(xa["tickwidth"], 0.5)
+        self.assertAlmostEqual(xa["linewidth"], 0.5)
+
+    def test_minor_ticks_emitted(self):
+        from matplotlib.ticker import AutoMinorLocator
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [3, 4, 5])
+        ax.xaxis.set_minor_locator(AutoMinorLocator())
+        ax.tick_params(which="minor", direction="in", length=1.5)
+        spec = convert_figure(fig)
+        xa = spec["layout"]["xaxis"]
+        self.assertIn("minor", xa)
+        self.assertEqual(xa["minor"]["ticks"], "inside")
+
+    def test_mirror_ticks_when_both_sides(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [3, 4, 5])
+        ax.tick_params(top=True, right=True)
+        spec = convert_figure(fig)
+        self.assertEqual(spec["layout"]["xaxis"]["mirror"], "ticks")
+        self.assertEqual(spec["layout"]["yaxis"]["mirror"], "ticks")
+
+    def test_default_axes_keep_outside_ticks(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [3, 4, 5])
+        spec = convert_figure(fig)
+        xa = spec["layout"]["xaxis"]
+        self.assertEqual(xa["ticks"], "outside")
+        # box par defaut (spines visibles) mais ticks bas/gauche seulement
+        self.assertNotEqual(xa["mirror"], "ticks")
+        self.assertNotIn("tickfont", xa)  # sans-serif par defaut: non force
+
+
 if __name__ == "__main__":
     unittest.main()

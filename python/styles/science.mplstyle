@@ -45,6 +45,7 @@ font.family : serif
 font.serif : cmr10, CMU Serif, Computer Modern Roman, DejaVu Serif
 mathtext.fontset : cm
 axes.unicode_minus : False
+axes.formatter.use_mathtext : True
 
 # Pas de LaTeX (modification locale)
 text.usetex : False
