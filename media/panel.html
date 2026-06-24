@@ -2059,12 +2059,12 @@
   }
 
   const SCIENCE_COLORS = ["#0C5DA5", "#00B945", "#FF9500", "#FF2C00", "#845B97", "#474747", "#9e9e9e"];
-  const SCIENCE_FAMILY = "STIXGeneral, Times New Roman, Times, serif";
+  const SCIENCE_FAMILY = "CMU Serif, Latin Modern Roman, STIXGeneral, Times New Roman, Times, serif";
   const SCIENCE_PLOTLY_BASE = {
-    title: 15, axis: 13, tick: 11, legend: 11, line: 1.25, marker: 4,
+    title: 15, axis: 13, tick: 11, legend: 11, line: 1.3, marker: 4,
     grid: "none", bg: "white", palette: "science", bold: false,
     family: SCIENCE_FAMILY, ticksInside: true, mirrorTicks: true, minorTicks: true,
-    legendFrame: false, tightMargins: true, axisWidth: 0.7, tickLen: 4,
+    legendFrame: false, tightMargins: true, axisWidth: 0.6, tickLen: 3.5,
     colors: SCIENCE_COLORS
   };
   const SCIENCE_MODES = {
@@ -2178,10 +2178,14 @@
     patch[axisKey + ".linecolor"] = "#000000";
     patch[axisKey + ".tickcolor"] = "#000000";
     patch[axisKey + ".automargin"] = true;
+    // Ticks internes (science) : dessiner le cadre et les ticks PAR-DESSUS les
+    // donnees, sinon les traces masquent les graduations vers l'interieur.
+    if (scienceTicks){ patch[axisKey + ".layer"] = "above traces"; }
     if (values && values.minorTicks){
       patch[axisKey + ".minor.ticks"] = scienceTicks ? "inside" : "outside";
       patch[axisKey + ".minor.ticklen"] = Math.max(1.5, tickLen * 0.5);
       patch[axisKey + ".minor.tickwidth"] = axisWidth;
+      patch[axisKey + ".minor.tickcolor"] = "#000000";
       patch[axisKey + ".minor.showgrid"] = false;
     }
     return patch;
