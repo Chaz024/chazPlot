@@ -1,0 +1,15 @@
+# Style matplotlib "nature" — vendorise depuis SciencePlots (BSD-3-Clause).
+# Delta a empiler sur "science" : plt.style.context(['science', 'nature']).
+
+# Cycle de couleurs Nature
+axes.prop_cycle : cycler('color', ['1f77b4', 'ff7f0e', '2ca02c', 'd62728', '9467bd', '8c564b', 'e377c2', '7f7f7f', 'bcbd22', '17becf'])
+
+# Format colonne unique (89 mm)
+figure.figsize : 3.3, 2.5
+figure.dpi : 350
+
+# Police sans-serif, petite (recommandation Nature)
+font.size : 7
+font.family : sans-serif
+font.sans-serif : DejaVu Sans, Arial, Helvetica, Lucida Grande, Verdana, Geneva, sans-serif
+mathtext.fontset : dejavusans

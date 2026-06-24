@@ -1,0 +1,12 @@
+# Style matplotlib "ieee" — vendorise depuis SciencePlots (BSD-3-Clause).
+# Delta a empiler sur "science" : plt.style.context(['science', 'ieee']).
+
+# Cycle couleur + style de trait (lisible en noir et blanc)
+axes.prop_cycle : (cycler('color', ['k', 'r', 'b', 'g']) + cycler('ls', ['-', '--', ':', '-.']))
+
+# Format colonne IEEE
+figure.figsize : 3.3, 2.5
+figure.dpi : 600
+
+# Taille de police
+font.size : 8
