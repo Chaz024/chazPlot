@@ -9,8 +9,9 @@ function check(name, fn) {
   catch (e) { console.error("FAIL - " + name + " : " + e.message); process.exitCode = 1; }
 }
 check("listes label/value", function () {
-  assert.ok(Array.isArray(LE.LINE_DASHES) && LE.LINE_DASHES.length >= 4);
-  assert.strictEqual(LE.LINE_DASHES[0].value, "solid");
+  assert.ok(Array.isArray(LE.LINE_DASHES) && LE.LINE_DASHES.length >= 5);
+  assert.strictEqual(LE.LINE_DASHES[0].value, "none");
+  assert.strictEqual(LE.LINE_DASHES[1].value, "solid");
   assert.ok(Array.isArray(LE.MARKER_SYMBOLS) && LE.MARKER_SYMBOLS.length >= 5);
   assert.strictEqual(LE.MARKER_SYMBOLS[0].value, "");
   assert.ok(Array.isArray(LE.BASE_COLORS) && LE.BASE_COLORS.length >= 8);
@@ -43,6 +44,7 @@ check("compareLegendPrefix: fallback", function () {
 check("latexToPlainText: symboles usuels", function () {
   assert.strictEqual(LE.latexToPlainText("Angle $\\delta$ et $\\Delta$"), "Angle \u03b4 et \u0394");
   assert.strictEqual(LE.latexToPlainText("$\\mathrm{Re}$ <= $\\infty$"), "Re <= \u221e");
+  assert.strictEqual(LE.latexToPlainText("$M^2_0 \\leq \\frac{A}{A^*}$"), "M\u00b2\u2080 \u2264 A/A^*");
 });
 check("titleText et axisLayoutKey", function () {
   assert.strictEqual(LE.titleText({ text: "Titre" }), "Titre");

@@ -189,6 +189,12 @@
   .sp-inset-armed{ outline:2px dashed var(--sp-accent); outline-offset:-2px; }
   .sp-measure-armed{ outline:2px dashed #ff5db1; outline-offset:-2px; }
   .sp-legend-armed{ outline:2px dashed var(--vscode-charts-purple, #b180d7); outline-offset:-2px; }
+  .sp-annotation-armed{ outline:2px dashed var(--vscode-charts-yellow, #d7a318); outline-offset:-2px; }
+  /* Zone de saisie de la pointe de fleche (annotationTail) : Plotly trace un
+     path transparent .anndrag (stroke ~ arrowwidth+6) le long de la fleche pour
+     la capturer. On elargit ce stroke transparent pour qu'il soit facile a
+     attraper sans bouger toute l'annotation (le rendu visible ne change pas). */
+  .annotation-arrow-g path.anndrag{ stroke-width:22px !important; }
   /* Panneau de lecture des mesures (dx/dy/pente, aire, stats) */
   .measure-readout{
     font-family: var(--vscode-editor-font-family, monospace);
@@ -242,6 +248,26 @@
   }
   .publication-editor .pub-actions{ display:flex; gap:6px; align-items:flex-end; }
   .publication-editor .pub-hint{ width:100%; font-size:11px; color:var(--sp-text-dim); }
+  .publication-editor:not([data-preset="science"]) .pub-science-mode{ display:none; }
+  .annotation-editor{
+    position:fixed; right:16px; bottom:16px; z-index:122;
+    display:none; align-items:flex-end; gap:8px; flex-wrap:wrap;
+    max-width:calc(100vw - 32px); padding:10px;
+    border:1px solid var(--sp-border); border-radius:8px;
+    background:var(--sp-surface); color:var(--sp-text);
+    box-shadow:var(--sp-shadow-2);
+  }
+  .annotation-editor label{ display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--sp-text-dim); }
+  .annotation-editor input{
+    min-width:68px; height:26px; padding:2px 6px;
+    border:1px solid var(--vscode-input-border, var(--sp-border)); border-radius:6px;
+    background:var(--vscode-input-background); color:var(--vscode-input-foreground);
+    font-family:inherit; font-size:12px;
+  }
+  .annotation-editor input[type=color]{ min-width:44px; width:44px; padding:1px 3px; }
+  .annotation-editor input[type=checkbox]{ min-width:0; width:auto; height:auto; }
+  .annotation-editor .ann-text{ min-width:220px; }
+  .annotation-editor .ann-inline{ flex-direction:row; align-items:center; gap:6px; height:26px; }
   .le-color-tools{ display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
   .le-swatches{ display:flex; gap:4px; flex-wrap:wrap; max-width:190px; }
   .le-swatch{
@@ -477,16 +503,43 @@
   <!-- Style publication -->
   <div class="publication-editor" id="publicationEditor" role="dialog" aria-label="Style publication">
     <label>Preset <select id="pubPreset">
+      <option value="science">SciencePlots</option>
       <option value="article">Article</option>
       <option value="presentation">Presentation</option>
       <option value="rapport">Rapport</option>
       <option value="colorblind">Colorblind</option>
+    </select></label>
+    <label class="pub-science-mode" id="pubScienceModeWrap">Mode <select id="pubScienceMode">
+      <option value="base">Base</option>
+      <option value="ieee">IEEE</option>
+      <option value="nature">Nature</option>
+      <option value="notebook">Notebook</option>
     </select></label>
     <span class="pub-actions">
       <button class="compact primary" id="pubApply">Appliquer</button>
       <button class="compact" id="pubClose">Fermer</button>
     </span>
     <span class="pub-hint">Le preset est previsualise immediatement.</span>
+  </div>
+
+  <div class="annotation-editor" id="annotationEditor" role="dialog" aria-label="Annotation">
+    <label>Texte <input class="ann-text" id="annText" type="text" value="annotation"></label>
+    <label>Couleur texte
+      <div class="le-swatches" id="annTextColors" aria-label="Couleurs de base"></div>
+      <details class="le-advanced"><summary>Avance</summary>
+        <input id="annTextColor" type="color" value="#000000"></details>
+    </label>
+    <label>Taille <input id="annFontSize" type="number" min="6" max="96" step="1" value="14"></label>
+    <label class="ann-inline"><input id="annBold" type="checkbox"> Gras</label>
+    <label>Couleur fleche
+      <div class="le-swatches" id="annArrowColors" aria-label="Couleurs de base"></div>
+      <details class="le-advanced"><summary>Avance</summary>
+        <input id="annArrowColor" type="color" value="#000000"></details>
+    </label>
+    <label class="ann-inline"><input id="annShowArrow" type="checkbox" checked> Fleche</label>
+    <button class="compact primary" id="annApply">Appliquer</button>
+    <button class="compact" id="annDelete">Supprimer</button>
+    <button class="compact" id="annClose">Fermer</button>
   </div>
 
   <div class="legend-editor" id="legendEditor" role="dialog" aria-label="Edition de legende" data-mode="trace">
@@ -1612,9 +1665,15 @@
         if (fig.png){ files.push({ name: "figure.png", dataUrl: "data:image/png;base64," + fig.png }); formats.push("png"); }
         if (fig.svg){ files.push({ name: "figure.svg", dataUrl: "data:image/svg+xml;base64," + fig.svg }); formats.push("svg"); }
       }
-      // PDF : natif matplotlib si disponible (figure simple), sinon raster
-      // depuis l'element vivant (comparaison / encart / erreurs).
-      if (fig.pdf && fig.pdf !== "__webview__"){
+      // PDF : natif matplotlib si disponible (figure simple NON editee), sinon
+      // raster depuis l'element vivant (comparaison / encart / erreurs / figure
+      // editee dont le PDF natif est perime, comme la sauvegarde unitaire).
+      // On detecte les ajouts (annotations/encart) directement sur l'element
+      // vivant : c'est le rendu reellement affiche qui doit partir dans le PDF,
+      // sans dependre de la propagation du flag fig.edited.
+      const liveLayout = (el && el.layout) || {};
+      const liveExtras = (Array.isArray(liveLayout.annotations) && liveLayout.annotations.length > 0) || !!(el && el._spHasInset);
+      if (fig.pdf && fig.pdf !== "__webview__" && !fig.edited && !liveExtras){
         files.push({ name: "figure.pdf", dataUrl: "data:application/pdf;base64," + fig.pdf }); formats.push("pdf");
       } else if (fig.plotly && el){
         try {
@@ -1642,7 +1701,7 @@
   // En vue liste, le patch est persiste via extension.js ; en comparaison il
   // reste de session.
   // ----------------------------------------------------------
-  let legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "" };
+  let legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "", originalTrace: null, applied: false };
 
   function normalizedTitleText(value){
     if (typeof LegendEdit === "undefined"){ return value == null ? "" : String(value); }
@@ -1709,11 +1768,52 @@
   // ---- Selecteur de couleur 2D (mode avance) ----
   let pickerHsv = { h: 0, s: 1, v: 1 };
 
-  // Restyle la trace ciblee en direct, SANS persister (apercu pendant le drag).
-  function livePreviewColor(hex){
+  function legendTraceValues(){
+    return {
+      name: document.getElementById("leName").value,
+      color: document.getElementById("leColor").value,
+      dash: document.getElementById("leDash").value,
+      width: Number(document.getElementById("leWidth").value),
+      symbol: document.getElementById("leSymbol").value,
+      markerSize: Number(document.getElementById("leMarkerSize").value)
+    };
+  }
+
+  function markerModePatch(trace, values){
+    if (!trace || trace.type && trace.type !== "scatter"){ return {}; }
+    const original = String(trace.mode || "lines");
+    const keepText = original.split("+").indexOf("text") >= 0;
+    const wantsLine = values.dash !== "none";
+    const wantsMarker = !!values.symbol || !wantsLine;
+    const parts = [];
+    if (wantsLine){ parts.push("lines"); }
+    if (wantsMarker){ parts.push("markers"); }
+    if (keepText){ parts.push("text"); }
+    return { mode: parts.length ? parts.join("+") : "lines" };
+  }
+
+  function legendRestylePatch(values){
+    const t = legendEditTarget;
+    const v = values || legendTraceValues();
+    const patch = Object.assign(LegendEdit.buildRestyle(v), markerModePatch(t.originalTrace || (t.el && t.el.data && t.el.data[t.idx]), v));
+    if (v.dash === "none" && !v.symbol){ patch["marker.symbol"] = "circle"; }
+    return patch;
+  }
+
+  // Restyle la trace ciblee en direct, SANS persister.
+  function livePreviewLegendTrace(values){
     const t = legendEditTarget;
     if (t.mode !== "trace" || !t.el || t.idx < 0 || typeof LegendEdit === "undefined"){ return; }
-    try { Plotly.restyle(t.el, LegendEdit.buildRestyle({ color: hex }), [t.idx]); } catch (e) {}
+    try { Plotly.restyle(t.el, legendRestylePatch(values), [t.idx]); } catch (e) {}
+  }
+
+  function restoreLegendTracePreview(){
+    const t = legendEditTarget;
+    if (t.mode !== "trace" || t.applied || !t.el || t.idx < 0 || !t.originalTrace){ return; }
+    const v = LegendEdit.readTrace(t.originalTrace);
+    const patch = Object.assign(LegendEdit.buildRestyle(v), { mode: t.originalTrace.mode || undefined });
+    if (patch.mode === undefined){ delete patch.mode; }
+    try { Plotly.restyle(t.el, patch, [t.idx]); } catch (e) {}
   }
 
   function renderPicker(){
@@ -1749,7 +1849,7 @@
     function move(ev){
       const r = el.getBoundingClientRect();
       update(clamp01((ev.clientX - r.left) / r.width), clamp01((ev.clientY - r.top) / r.height));
-      livePreviewColor(renderPicker());
+      livePreviewLegendTrace({ color: renderPicker() });
     }
     el.addEventListener("pointerdown", function(ev){
       el.setPointerCapture(ev.pointerId);
@@ -1761,10 +1861,7 @@
     });
     el.addEventListener("pointerup", function(ev){
       try { el.releasePointerCapture(ev.pointerId); } catch (e) {}
-      // Persiste l'edition (couleur courante) une seule fois.
-      const t = legendEditTarget;
-      const hex = LegendEdit.hsvToHex(pickerHsv.h, pickerHsv.s, pickerHsv.v);
-      if (t.el && t.idx >= 0){ persistLegendPatch(t.el, t.idx, LegendEdit.buildRestyle({ color: hex })); }
+      livePreviewLegendTrace({ color: LegendEdit.hsvToHex(pickerHsv.h, pickerHsv.s, pickerHsv.v) });
     });
   }
 
@@ -1780,12 +1877,12 @@
     if (hexInput){
       hexInput.addEventListener("change", function(){
         setPickerFromHex(hexInput.value);
-        livePreviewColor(LegendEdit.hsvToHex(pickerHsv.h, pickerHsv.s, pickerHsv.v));
+        livePreviewLegendTrace({ color: LegendEdit.hsvToHex(pickerHsv.h, pickerHsv.s, pickerHsv.v) });
       });
     }
     const colorInput = document.getElementById("leColor");
     if (colorInput){
-      colorInput.addEventListener("input", function(){ setPickerFromHex(colorInput.value); });
+      colorInput.addEventListener("input", function(){ setPickerFromHex(colorInput.value); livePreviewLegendTrace({ color: colorInput.value }); });
     }
   })();
 
@@ -1801,7 +1898,7 @@
       btn.title = label;
       btn.setAttribute("aria-label", label);
       btn.style.background = color;
-      btn.addEventListener("click", function(){ setLegendColor(color); });
+      btn.addEventListener("click", function(){ setLegendColor(color); setPickerFromHex(color); livePreviewLegendTrace({ color: color }); });
       container.appendChild(btn);
     });
   }
@@ -1811,12 +1908,21 @@
     fillLegendSelect(document.getElementById("leDash"), LegendEdit.LINE_DASHES);
     fillLegendSelect(document.getElementById("leSymbol"), LegendEdit.MARKER_SYMBOLS);
     renderColorSwatches(document.getElementById("leBaseColors"), LegendEdit.BASE_COLORS);
+    ["leName", "leDash", "leWidth", "leSymbol", "leMarkerSize"].forEach(function(id){
+      const input = document.getElementById(id);
+      if (!input){ return; }
+      input.addEventListener(id === "leName" ? "input" : "change", function(){ livePreviewLegendTrace(); });
+      if (id === "leWidth" || id === "leMarkerSize"){
+        input.addEventListener("input", function(){ livePreviewLegendTrace(); });
+      }
+    });
   })();
 
   function closeLegendEditor(){
+    restoreLegendTracePreview();
     const box = document.getElementById("legendEditor");
     if (box){ box.style.display = "none"; }
-    legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "" };
+    legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "", originalTrace: null, applied: false };
   }
 
   function showLegendEditor(mode){
@@ -1828,8 +1934,9 @@
 
   function openLegendEditor(el, idx){
     if (!el || !el.data || !el.data[idx] || typeof LegendEdit === "undefined"){ return; }
+    closeAnnotationEditor();
     closePublicationEditor();
-    legendEditTarget = { mode: "trace", el: el, idx: idx, textKey: "", fontSizeKey: "" };
+    legendEditTarget = { mode: "trace", el: el, idx: idx, textKey: "", fontSizeKey: "", originalTrace: clone(el.data[idx]), applied: false };
     const v = LegendEdit.readTrace(el.data[idx]);
     document.getElementById("leName").value = v.name;
     document.getElementById("leColor").value = LegendEdit.toHexColor(v.color, "#1f77b4");
@@ -1843,9 +1950,10 @@
 
   function openTextEditor(el, target){
     if (!el || !target || !target.key || typeof LegendEdit === "undefined"){ return; }
+    closeAnnotationEditor();
     closePublicationEditor();
     const style = LegendEdit.textStyle(target.text);
-    legendEditTarget = { mode: "text", el: el, idx: -1, textKey: target.key, fontSizeKey: textFontSizeKey(target.key) };
+    legendEditTarget = { mode: "text", el: el, idx: -1, textKey: target.key, fontSizeKey: textFontSizeKey(target.key), originalTrace: null, applied: false };
     document.getElementById("leTextValue").value = LegendEdit.latexToPlainText(style.text);
     document.getElementById("leFontSize").value = String(textFontSize(el.layout || el._spBaseLayout || {}, target.key, target.defaultSize || 14));
     document.getElementById("leBold").checked = !!style.bold;
@@ -1916,6 +2024,10 @@
     Object.keys(update || {}).forEach(function(k){
       if (k === "title.text" || /^[xy]axis\d*\.title\.text$/.test(k)){
         patch[k] = typeof LegendEdit !== "undefined" ? LegendEdit.latexToPlainText(update[k]) : update[k];
+      } else if (/^annotations\[\d+\]\.(ax|ay|x|y)$/.test(k)){
+        // Glisser la pointe (annotationTail) ou l'ancre (annotationPosition)
+        // d'une annotation -> persister la nouvelle geometrie de la fleche.
+        patch[k] = update[k];
       }
     });
     persistLayoutPatch(el, patch);
@@ -1946,7 +2058,32 @@
     }
   }
 
+  const SCIENCE_COLORS = ["#0C5DA5", "#00B945", "#FF9500", "#FF2C00", "#845B97", "#474747", "#9e9e9e"];
+  const SCIENCE_FAMILY = "STIXGeneral, Times New Roman, Times, serif";
+  const SCIENCE_PLOTLY_BASE = {
+    title: 15, axis: 13, tick: 11, legend: 11, line: 1.25, marker: 4,
+    grid: "none", bg: "white", palette: "science", bold: false,
+    family: SCIENCE_FAMILY, ticksInside: true, mirrorTicks: true, minorTicks: true,
+    legendFrame: false, tightMargins: true, axisWidth: 0.7, tickLen: 4,
+    colors: SCIENCE_COLORS
+  };
+  const SCIENCE_MODES = {
+    base: SCIENCE_PLOTLY_BASE,
+    ieee: Object.assign({}, SCIENCE_PLOTLY_BASE, {
+      title: 13, axis: 12, tick: 10, legend: 10, line: 1.15, marker: 3.5,
+      colors: ["#000000", "#d62728", "#1f77b4", "#2ca02c"], dashCycle: ["solid", "dash", "dot", "dashdot"]
+    }),
+    nature: Object.assign({}, SCIENCE_PLOTLY_BASE, {
+      title: 13, axis: 12, tick: 10, legend: 10, line: 1.1, marker: 3.5,
+      family: "Arial, Helvetica, sans-serif", bold: false, colors: SCIENCE_COLORS
+    }),
+    notebook: Object.assign({}, SCIENCE_PLOTLY_BASE, {
+      title: 20, axis: 17, tick: 13, legend: 13, line: 2, marker: 6,
+      grid: "light", axisWidth: 1, tickLen: 5
+    })
+  };
   const PUBLICATION_PRESETS = {
+    science: SCIENCE_PLOTLY_BASE,
     article: { title: 20, axis: 16, tick: 12, legend: 12, line: 2, marker: 6, grid: "light", bg: "white", palette: "tab10", bold: false },
     presentation: { title: 26, axis: 20, tick: 15, legend: 15, line: 3, marker: 8, grid: "light", bg: "white", palette: "tab10", bold: true },
     rapport: { title: 22, axis: 17, tick: 13, legend: 13, line: 2.4, marker: 7, grid: "light", bg: "white", palette: "tab10", bold: true },
@@ -1956,9 +2093,23 @@
   let publicationPreview = null;
   let publicationPreviewSeq = 0;
 
-  function readPublicationValues(){
+  function selectedPublicationPreset(){
     const preset = document.getElementById("pubPreset");
-    return PUBLICATION_PRESETS[(preset && preset.value) || "article"] || PUBLICATION_PRESETS.article;
+    return (preset && preset.value) || "article";
+  }
+
+  function updatePublicationModeVisibility(){
+    const box = document.getElementById("publicationEditor");
+    if (box){ box.dataset.preset = selectedPublicationPreset(); }
+  }
+
+  function readPublicationValues(){
+    const preset = selectedPublicationPreset();
+    if (preset === "science"){
+      const mode = document.getElementById("pubScienceMode");
+      return SCIENCE_MODES[(mode && mode.value) || "base"] || SCIENCE_MODES.base;
+    }
+    return PUBLICATION_PRESETS[preset] || PUBLICATION_PRESETS.article;
   }
 
   function capturePublicationState(el){
@@ -1992,27 +2143,47 @@
 
   function openPublicationEditor(el){
     if (!el || typeof LegendEdit === "undefined"){ return; }
+    closeAnnotationEditor();
     closeLegendEditor();
     closePublicationEditor(false);
     publicationTarget = el;
     publicationPreview = capturePublicationState(el);
     publicationPreviewSeq += 1;
     const preset = document.getElementById("pubPreset");
-    if (preset){ preset.value = "article"; }
+    if (preset){ preset.value = "science"; }
+    const mode = document.getElementById("pubScienceMode");
+    if (mode){ mode.value = "base"; }
+    updatePublicationModeVisibility();
     document.getElementById("publicationEditor").style.display = "flex";
     previewPublicationStyle();
   }
 
-  function gridPatch(axisKey, gridMode){
+  function gridPatch(axisKey, gridMode, values){
     const light = gridMode === "light";
     const full = gridMode === "full";
+    const scienceTicks = values && values.ticksInside;
+    const axisWidth = values && values.axisWidth ? values.axisWidth : (scienceTicks ? 0.7 : 1);
+    const tickLen = values && values.tickLen ? values.tickLen : (scienceTicks ? 4 : 5);
     const patch = {};
     patch[axisKey + ".showgrid"] = light || full;
     patch[axisKey + ".gridcolor"] = light ? "rgba(0,0,0,0.12)" : "rgba(0,0,0,0.18)";
-    patch[axisKey + ".gridwidth"] = light ? 1 : 1.2;
+    patch[axisKey + ".gridwidth"] = light ? 0.7 : 1.2;
     patch[axisKey + ".zeroline"] = full;
-    patch[axisKey + ".linecolor"] = "rgba(0,0,0,0.72)";
-    patch[axisKey + ".tickcolor"] = "rgba(0,0,0,0.72)";
+    patch[axisKey + ".showline"] = true;
+    patch[axisKey + ".mirror"] = values && values.mirrorTicks ? "allticks" : true;
+    patch[axisKey + ".ticks"] = scienceTicks ? "inside" : "outside";
+    patch[axisKey + ".ticklen"] = tickLen;
+    patch[axisKey + ".tickwidth"] = axisWidth;
+    patch[axisKey + ".linewidth"] = axisWidth;
+    patch[axisKey + ".linecolor"] = "#000000";
+    patch[axisKey + ".tickcolor"] = "#000000";
+    patch[axisKey + ".automargin"] = true;
+    if (values && values.minorTicks){
+      patch[axisKey + ".minor.ticks"] = scienceTicks ? "inside" : "outside";
+      patch[axisKey + ".minor.ticklen"] = Math.max(1.5, tickLen * 0.5);
+      patch[axisKey + ".minor.tickwidth"] = axisWidth;
+      patch[axisKey + ".minor.showgrid"] = false;
+    }
     return patch;
   }
 
@@ -2025,12 +2196,27 @@
       "title.font.size": values.title,
       "legend.font.size": values.legend
     };
+    if (values.tightMargins){
+      patch["margin.l"] = 54;
+      patch["margin.r"] = 18;
+      patch["margin.t"] = 42;
+      patch["margin.b"] = 46;
+    }
+    if (values.family){
+      patch["font.family"] = values.family;
+      patch["title.font.family"] = values.family;
+      patch["legend.font.family"] = values.family;
+    }
+    if (values.legendFrame === false){
+      patch["legend.bgcolor"] = "rgba(0,0,0,0)";
+      patch["legend.borderwidth"] = 0;
+    }
     if (values.bold && layout.title && layout.title.text){
       patch["title.text"] = LegendEdit.styledText(layout.title.text, true, false);
     }
     Object.keys(layout).forEach(function(key){
       if (!/^[xy]axis\d*$/.test(key)){ return; }
-      Object.assign(patch, gridPatch(key, values.grid));
+      Object.assign(patch, gridPatch(key, values.grid, values));
       patch[key + ".title.font.size"] = values.axis;
       patch[key + ".tickfont.size"] = values.tick;
       if (values.bold && layout[key] && layout[key].title && layout[key].title.text){
@@ -2046,15 +2232,16 @@
     return patch;
   }
 
-  function publicationTracePatch(trace, color, values){
+  function publicationTracePatch(trace, color, values, i){
     const patch = {};
-    const mode = String((trace && trace.mode) || "");
+    const traceMode = String((trace && trace.mode) || "");
     const type = trace ? String(trace.type || "") : "";
-    if (trace && (trace.line !== undefined || /lines/.test(mode) || type === "scatter")){
+    if (trace && (trace.line !== undefined || /lines/.test(traceMode) || type === "scatter")){
       patch["line.width"] = values.line;
       if (color){ patch["line.color"] = color; }
+      if (values.dashCycle){ patch["line.dash"] = values.dashCycle[i % values.dashCycle.length]; }
     }
-    if (trace && (trace.marker !== undefined || /markers/.test(mode) || type === "bar")){
+    if (trace && (trace.marker !== undefined || /markers/.test(traceMode) || type === "bar")){
       patch["marker.size"] = values.marker;
       if (color){ patch["marker.color"] = color; }
     }
@@ -2064,13 +2251,13 @@
 
   function applyPublicationPatchToGraph(el, values, persist){
     if (!el || typeof Plotly === "undefined" || typeof LegendEdit === "undefined"){ return Promise.resolve(); }
-    const colors = LegendEdit.paletteColors(values.palette);
+    const colors = values.colors || LegendEdit.paletteColors(values.palette);
     const layoutPatch = buildPublicationLayoutPatch(el, values);
     if (persist){ persistLayoutPatch(el, layoutPatch); }
     else if (el._spBaseLayout){ LegendEdit.applyPatch(el._spBaseLayout, layoutPatch); }
     const promises = [Promise.resolve(Plotly.relayout(el, layoutPatch))];
     (el.data || []).forEach(function(trace, i){
-      const patch = publicationTracePatch(trace, colors[i % colors.length], values);
+      const patch = publicationTracePatch(trace, colors[i % colors.length], values, i);
       if (!Object.keys(patch).length){ return; }
       if (el._spBaseData && el._spBaseData[i]){ LegendEdit.applyPatch(el._spBaseData[i], patch); }
       if (persist){ persistLegendPatch(el, i, patch); }
@@ -2109,7 +2296,9 @@
 
   (function initPublicationEditor(){
     const preset = document.getElementById("pubPreset");
-    if (preset){ preset.addEventListener("change", previewPublicationStyle); }
+    if (preset){ preset.addEventListener("change", function(){ updatePublicationModeVisibility(); previewPublicationStyle(); }); }
+    const scienceMode = document.getElementById("pubScienceMode");
+    if (scienceMode){ scienceMode.addEventListener("change", previewPublicationStyle); }
     const apply = document.getElementById("pubApply");
     if (apply){ apply.addEventListener("click", commitPublicationStyle); }
     const close = document.getElementById("pubClose");
@@ -2127,14 +2316,8 @@
     }
     const idx = legendEditTarget.idx;
     if (idx < 0 || !el.data || !el.data[idx]){ return; }
-    const patch = LegendEdit.buildRestyle({
-      name: document.getElementById("leName").value,
-      color: document.getElementById("leColor").value,
-      dash: document.getElementById("leDash").value,
-      width: Number(document.getElementById("leWidth").value),
-      symbol: document.getElementById("leSymbol").value,
-      markerSize: Number(document.getElementById("leMarkerSize").value)
-    });
+    const patch = legendRestylePatch(legendTraceValues());
+    legendEditTarget.applied = true;
     restyleLegendTrace(el, idx, patch);
     closeLegendEditor();
   });
@@ -2236,12 +2419,224 @@
     }, true);
   }
 
+  let annotationTarget = { el: null, index: -1, original: null };
+
+  // Une annotation sans texte ni fleche est invisible et inselectionnable :
+  // on la supprime a la fermeture de l'editeur.
+  function dropEmptyAnnotation(){
+    const el = annotationTarget.el;
+    if (!el || annotationTarget.index < 0){ return; }
+    const annotations = annotationArray(el);
+    const ann = annotations[annotationTarget.index];
+    if (!ann){ return; }
+    const plain = String(ann.text || "").replace(/<[^>]+>/g, "").trim();
+    if (plain === "" && ann.showarrow === false){
+      annotations.splice(annotationTarget.index, 1);
+      persistAnnotations(el, annotations);
+    }
+  }
+
+  function closeAnnotationEditor(){
+    dropEmptyAnnotation();
+    const box = document.getElementById("annotationEditor");
+    if (box){ box.style.display = "none"; }
+    annotationTarget = { el: null, index: -1, original: null };
+  }
+
+  function setAnnotationFeedback(el, coordsEl){
+    if (el.parentElement){ el.parentElement.classList.toggle("sp-annotation-armed", !!el._spAnnotationArmed); }
+    if (coordsEl){ coordsEl.textContent = el._spAnnotationArmed ? "Mode annotation : clic = texte, Ctrl+clic = texte + fleche ; clic sur une annotation pour l'editer, clic droit pour la supprimer, glisser la pointe pour orienter" : ""; }
+  }
+
+  function annotationArray(el){
+    const layout = el.layout || el._spBaseLayout || {};
+    return Array.isArray(layout.annotations) ? clone(layout.annotations) : [];
+  }
+
+  function persistAnnotations(el, annotations){
+    const patch = { annotations: annotations };
+    if (el._spBaseLayout){ el._spBaseLayout.annotations = clone(annotations); }
+    persistLayoutPatch(el, patch);
+    try { Plotly.relayout(el, patch); } catch (e) {}
+  }
+
+  function annotationIndexFromText(el, node, ev){
+    const textEl = node && node.closest ? node.closest("text") : (ev ? textNodeAtPoint(el, ev.clientX, ev.clientY) : null);
+    if (!textEl){ return -1; }
+    const key = findAnnotationTextKey(el, textEl, textFromDom(textEl));
+    const m = /^annotations\[(\d+)\]\.text$/.exec(key || "");
+    return m ? Number(m[1]) : -1;
+  }
+
+  // Index de l'annotation cliquee, qu'on clique son texte OU sa fleche (sans
+  // texte, il n'y a pas de noeud <text> : Plotly groupe chaque annotation dans
+  // un g.annotation[data-index], qui contient aussi le groupe de fleche).
+  function annotationIndexFromTarget(el, node, ev){
+    if (node && node.closest){
+      const host = node.closest("g.annotation[data-index]");
+      if (host){
+        const di = parseInt(host.getAttribute("data-index"), 10);
+        if (di >= 0){ return di; }
+      }
+    }
+    return annotationIndexFromText(el, node, ev);
+  }
+
+  function setAnnotationForm(annotation){
+    const ann = annotation || {};
+    const rawText = ann.text != null ? ann.text : "";
+    const style = typeof LegendEdit !== "undefined" ? LegendEdit.textStyle(rawText) : { text: rawText, bold: false };
+    document.getElementById("annText").value = style.text || "";
+    document.getElementById("annTextColor").value = LegendEdit.toHexColor((ann.font && ann.font.color) || ann.arrowcolor || "#000000", "#000000");
+    document.getElementById("annFontSize").value = String((ann.font && ann.font.size) || 14);
+    document.getElementById("annBold").checked = !!style.bold;
+    document.getElementById("annArrowColor").value = LegendEdit.toHexColor(ann.arrowcolor || "#000000", "#000000");
+    document.getElementById("annShowArrow").checked = ann.showarrow !== false;
+  }
+
+  function readAnnotationForm(base){
+    const ann = Object.assign({}, base || {});
+    const color = document.getElementById("annTextColor").value || "#000000";
+    const arrowColor = document.getElementById("annArrowColor").value || color;
+    ann.text = LegendEdit.styledText(document.getElementById("annText").value || "", document.getElementById("annBold").checked, false);
+    // x/y (ancre) et ax/ay (pointe) restent ceux de l'objet (clic initial + drag).
+    ann.showarrow = !!document.getElementById("annShowArrow").checked;
+    ann.arrowhead = ann.arrowhead || 2;
+    ann.arrowcolor = arrowColor;
+    ann.font = Object.assign({}, ann.font || {}, {
+      color: color,
+      size: Number(document.getElementById("annFontSize").value) || 14
+    });
+    return ann;
+  }
+
+  function openAnnotationEditor(el, index, annotation){
+    if (!el || typeof LegendEdit === "undefined"){ return; }
+    closeLegendEditor();
+    closePublicationEditor(false);
+    annotationTarget = { el: el, index: index, original: clone(annotation || {}) };
+    setAnnotationForm(annotation);
+    document.getElementById("annotationEditor").style.display = "flex";
+  }
+
+  function createAnnotationFromPoint(el, pt, withArrow){
+    if (!el || !pt){ return; }
+    const xref = pt.xaxis && pt.xaxis._id ? pt.xaxis._id : "x";
+    const yref = pt.yaxis && pt.yaxis._id ? pt.yaxis._id : "y";
+    const annotations = annotationArray(el);
+    const ann = {
+      text: "", x: pt.x, y: pt.y, xref: xref, yref: yref,
+      showarrow: !!withArrow, arrowhead: 2, ax: 40, ay: -40,
+      arrowcolor: "#000000", font: { color: "#000000", size: 14 }
+    };
+    annotations.push(ann);
+    persistAnnotations(el, annotations);
+    openAnnotationEditor(el, annotations.length - 1, ann);
+  }
+
+  function attachAnnotationEditor(el){
+    if (!el || el._spAnnotationBound){ return; }
+    el._spAnnotationBound = true;
+    el.addEventListener("click", function(ev){
+      if (!el._spAnnotationArmed){ return; }
+      const idx = annotationIndexFromTarget(el, ev.target, ev);
+      if (idx < 0){ return; }
+      const annotations = annotationArray(el);
+      ev.preventDefault(); ev.stopPropagation();
+      openAnnotationEditor(el, idx, annotations[idx]);
+    }, true);
+    // Clic droit sur une annotation (texte ou fleche) = la supprimer.
+    el.addEventListener("contextmenu", function(ev){
+      if (!el._spAnnotationArmed){ return; }
+      const idx = annotationIndexFromTarget(el, ev.target, ev);
+      if (idx < 0){ return; }
+      ev.preventDefault(); ev.stopPropagation();
+      if (annotationTarget.el === el && annotationTarget.index === idx){
+        // Editeur ouvert sur cette annotation : le fermer sans re-declencher
+        // la suppression auto du vide (on supprime explicitement ici).
+        annotationTarget = { el: null, index: -1, original: null };
+        const box = document.getElementById("annotationEditor");
+        if (box){ box.style.display = "none"; }
+      }
+      const annotations = annotationArray(el);
+      annotations.splice(idx, 1);
+      persistAnnotations(el, annotations);
+    }, true);
+    if (el.on){
+      el.on("plotly_click", function(ev){
+        if (!el._spAnnotationArmed){ return; }
+        const pt = ev && ev.points && ev.points[0];
+        if (!pt || (pt.data && (pt.data._spMeasure || pt.data._spInsetClone))){ return; }
+        // Clic = texte seul ; Ctrl/Cmd+clic = texte + fleche.
+        const withArrow = !!(ev && ev.event && (ev.event.ctrlKey || ev.event.metaKey));
+        createAnnotationFromPoint(el, pt, withArrow);
+      });
+    }
+  }
+
+  // Preview en direct : chaque modification d'un champ reecrit l'annotation
+  // ciblee et la persiste, comme l'edition de legende.
+  function livePreviewAnnotation(){
+    const el = annotationTarget.el;
+    if (!el || annotationTarget.index < 0){ return; }
+    const annotations = annotationArray(el);
+    annotations[annotationTarget.index] = readAnnotationForm(annotations[annotationTarget.index] || annotationTarget.original || {});
+    persistAnnotations(el, annotations);
+  }
+  ["annText", "annTextColor", "annFontSize", "annBold", "annArrowColor",
+   "annShowArrow"].forEach(function(id){
+    const input = document.getElementById(id);
+    if (!input){ return; }
+    const evt = (input.type === "text" || input.type === "number") ? "input" : "change";
+    input.addEventListener(evt, livePreviewAnnotation);
+  });
+
+  // Pastilles de couleurs de base (memes que les courbes) : un clic ecrit dans
+  // l'input couleur (source de verite, mode avance) et previsualise.
+  function renderAnnotationSwatches(container, inputId){
+    if (!container || typeof LegendEdit === "undefined"){ return; }
+    container.innerHTML = "";
+    LegendEdit.BASE_COLORS.forEach(function(item){
+      const color = typeof item === "string" ? item : item.value;
+      const label = typeof item === "string" ? item : item.label;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "le-swatch";
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      btn.style.background = color;
+      btn.addEventListener("click", function(){
+        const inp = document.getElementById(inputId);
+        if (inp){ inp.value = LegendEdit.toHexColor(color, inp.value || "#000000"); }
+        livePreviewAnnotation();
+      });
+      container.appendChild(btn);
+    });
+  }
+  renderAnnotationSwatches(document.getElementById("annTextColors"), "annTextColor");
+  renderAnnotationSwatches(document.getElementById("annArrowColors"), "annArrowColor");
+
+  document.getElementById("annClose").addEventListener("click", closeAnnotationEditor);
+  document.getElementById("annApply").addEventListener("click", function(){
+    // Tout est deja applique en preview ; le bouton ne fait que fermer.
+    livePreviewAnnotation();
+    closeAnnotationEditor();
+  });
+  document.getElementById("annDelete").addEventListener("click", function(){
+    const el = annotationTarget.el;
+    if (!el || annotationTarget.index < 0){ return; }
+    const annotations = annotationArray(el);
+    annotations.splice(annotationTarget.index, 1);
+    persistAnnotations(el, annotations);
+    closeAnnotationEditor();
+  });
+
   function plotlyConfig(fig){
     return {
       responsive: true,
       displaylogo: false,
       scrollZoom: false,
-      edits: { legendPosition: true, titleText: false, axisTitleText: false },
+      edits: { legendPosition: true, titleText: false, axisTitleText: false, annotationPosition: true, annotationTail: true },
       modeBarButtonsToRemove: ["select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "toImage"]
     };
   }
@@ -2267,7 +2662,11 @@
   function listPlotHeight(el, fig){
     const aspect = plotAspect(fig);
     const width = listPlotWidth(el, fig);
-    return Math.max(300, Math.round(width * aspect));
+
+    const toolbar = 90;
+    const maxHeight = Math.max(300, window.innerHeight - toolbar);
+
+    return Math.min(maxHeight, Math.max(300, Math.round(width * aspect)));
   }
   function applyListPlotSizing(el, fig){
     if (!el || !el.parentElement){ return { width: 0, height: 300 }; }
@@ -2499,9 +2898,11 @@
         gd._spInsetArmed = false;
         gd._spMeasureArmed = false;
         gd._spLegendEditArmed = false;
+        gd._spAnnotationArmed = false;
         setInsetArmedFeedback(gd, coordsEl);
         setMeasureArmedFeedback(gd);
         setLegendEditFeedback(gd, coordsEl);
+        setAnnotationFeedback(gd, coordsEl);
         openPublicationEditor(gd);
       }
     }, {
@@ -2517,6 +2918,7 @@
         gd._spInsetArmed = !gd._spInsetArmed;
         if (gd._spInsetArmed && gd._spMeasureArmed){ gd._spMeasureArmed = false; setMeasureArmedFeedback(gd); }
         if (gd._spInsetArmed && gd._spLegendEditArmed){ gd._spLegendEditArmed = false; setLegendEditFeedback(gd, coordsEl); }
+        if (gd._spInsetArmed && gd._spAnnotationArmed){ gd._spAnnotationArmed = false; setAnnotationFeedback(gd, coordsEl); }
         setInsetArmedFeedback(gd, coordsEl);
       }
     }, {
@@ -2526,6 +2928,23 @@
       // distincte de la loupe et du cadre d'encart.
       icon: { width: 16, height: 16, path: "M1 5 L15 5 L15 11 L1 11 Z M4 5 L4 8.5 M7 5 L7 9.5 M10 5 L10 8.5 M13 5 L13 9.5" },
       click: function(gd){ armMeasure(gd); }
+    }, {
+      name: "annotationEdit",
+      title: "Annotation : cliquer pour armer, puis Ctrl+clic ou clic sur un point pour annoter",
+      // Icone "zone de texte" facon PowerPoint : un T plein dans un cadre.
+      // Construit en aplats (remplissage non-zero) : cadre = anneau (rect
+      // exterieur CW evide d'un rect interieur CCW), puis la barre et le fut du T.
+      icon: { width: 16, height: 16, path: "M1 2 L15 2 L15 14 L1 14 Z M2.5 3.5 L2.5 12.5 L13.5 12.5 L13.5 3.5 Z M4 4.5 L12 4.5 L12 6 L4 6 Z M7 6 L9 6 L9 11 L7 11 Z" },
+      click: function(gd){
+        gd._spAnnotationArmed = !gd._spAnnotationArmed;
+        if (gd._spAnnotationArmed){
+          // Exclusif avec les autres modes armes (encart, mesure, legende).
+          if (gd._spInsetArmed){ gd._spInsetArmed = false; setInsetArmedFeedback(gd, coordsEl); }
+          if (gd._spMeasureArmed){ gd._spMeasureArmed = false; setMeasureArmedFeedback(gd); }
+          if (gd._spLegendEditArmed){ gd._spLegendEditArmed = false; setLegendEditFeedback(gd, coordsEl); }
+        }
+        setAnnotationFeedback(gd, coordsEl);
+      }
     }, {
       name: "legendEdit",
       title: "Editer la legende : cliquer pour armer, puis cliquer une entree",
@@ -2558,6 +2977,7 @@
     if (el._spAutoY === undefined){ el._spAutoY = true; }   // auto-echelle Y activee par defaut
     Plotly.newPlot(el, data, layout, config);
     attachLegendTextEditor(el);
+    attachAnnotationEditor(el);
     attachPlotNav(el);
     attachMeasure(el);
     if (el.on){

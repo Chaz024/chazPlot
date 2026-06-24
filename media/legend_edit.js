@@ -11,6 +11,7 @@
   "use strict";
 
   const LINE_DASHES = [
+    { label: "aucun", value: "none" },
     { label: "plein", value: "solid" },
     { label: "tirets", value: "dash" },
     { label: "points", value: "dot" },
@@ -143,14 +144,26 @@
     mu: "\u03bc", nu: "\u03bd", xi: "\u03be", Xi: "\u039e", pi: "\u03c0", Pi: "\u03a0", rho: "\u03c1",
     sigma: "\u03c3", Sigma: "\u03a3", tau: "\u03c4", upsilon: "\u03c5", phi: "\u03c6", varphi: "\u03d5",
     Phi: "\u03a6", chi: "\u03c7", psi: "\u03c8", Psi: "\u03a8", omega: "\u03c9", Omega: "\u03a9",
-    pm: "\u00b1", times: "\u00d7", cdot: "\u00b7", infty: "\u221e", le: "\u2264", ge: "\u2265",
-    neq: "\u2260", approx: "\u2248", partial: "\u2202", nabla: "\u2207", degree: "\u00b0"
+    pm: "\u00b1", times: "\u00d7", cdot: "\u00b7", infty: "\u221e", le: "\u2264", leq: "\u2264", ge: "\u2265", geq: "\u2265",
+    neq: "\u2260", ne: "\u2260", approx: "\u2248", sim: "\u223c", propto: "\u221d", partial: "\u2202", nabla: "\u2207", degree: "\u00b0"
   };
+
+  const SUPERSCRIPTS = { "0": "\u2070", "1": "\u00b9", "2": "\u00b2", "3": "\u00b3", "4": "\u2074", "5": "\u2075", "6": "\u2076", "7": "\u2077", "8": "\u2078", "9": "\u2079", "+": "\u207a", "-": "\u207b" };
+  const SUBSCRIPTS = { "0": "\u2080", "1": "\u2081", "2": "\u2082", "3": "\u2083", "4": "\u2084", "5": "\u2085", "6": "\u2086", "7": "\u2087", "8": "\u2088", "9": "\u2089", "+": "\u208a", "-": "\u208b" };
+
+  function scriptDigits(raw, table) {
+    return String(raw || "").split("").map(function(ch){ return table[ch] || ch; }).join("");
+  }
 
   function latexToPlainText(text) {
     let out = String(text == null ? "" : text);
     out = out.replace(/\$\$(.*?)\$\$/g, "$1").replace(/\$(.*?)\$/g, "$1");
-    out = out.replace(/\\(?:mathrm|text)\{([^{}]*)\}/g, "$1");
+    out = out.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$1/$2");
+    out = out.replace(/\\(?:mathrm|text|mathit|mathbf)\{([^{}]*)\}/g, "$1");
+    out = out.replace(/\^\{([0-9+\-]+)\}/g, function(m, s){ return scriptDigits(s, SUPERSCRIPTS); });
+    out = out.replace(/_\{([0-9+\-]+)\}/g, function(m, s){ return scriptDigits(s, SUBSCRIPTS); });
+    out = out.replace(/\^([0-9+\-])/g, function(m, s){ return scriptDigits(s, SUPERSCRIPTS); });
+    out = out.replace(/_([0-9+\-])/g, function(m, s){ return scriptDigits(s, SUBSCRIPTS); });
     out = out.replace(/\\([A-Za-z]+)/g, function (m, name) {
       return TEX_SYMBOLS[name] || m;
     });
@@ -200,7 +213,7 @@
       patch["marker.color"] = color;
       patch["fillcolor"] = hexToRgba(color, 0.25);
     }
-    if (v.dash) { patch["line.dash"] = v.dash; }
+    if (v.dash && v.dash !== "none") { patch["line.dash"] = v.dash; }
     if (isFinite(v.width) && Number(v.width) > 0) { patch["line.width"] = Number(v.width); }
     if (v.symbol !== undefined) { patch["marker.symbol"] = v.symbol; }
     if (isFinite(v.markerSize) && Number(v.markerSize) > 0) { patch["marker.size"] = Number(v.markerSize); }
