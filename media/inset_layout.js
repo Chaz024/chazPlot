@@ -190,7 +190,61 @@
     return { xDomain: [x0, x1], yDomain: [y0, y1] };
   }
 
+  // Coupe un segment [p0->p1] juste avant qu'il n'entre dans l'interieur du
+  // rect : si le segment penetre l'encart avant d'atteindre p1, renvoie le point
+  // de 1ere frontiere (le trait "passe sous l'encart") ; sinon p1 inchange.
+  // Liang-Barsky : tIn = entree dans le rect ferme.
+  function clipSegmentBeforeRect(x0, y0, x1, y1, rect) {
+    const dx = x1 - x0, dy = y1 - y0;
+    const p = [-dx, dx, -dy, dy];
+    const q = [x0 - rect.x0, rect.x1 - x0, y0 - rect.y0, rect.y1 - y0];
+    let tIn = 0, tOut = 1;
+    for (let k = 0; k < 4; k++) {
+      if (p[k] === 0) {
+        if (q[k] < 0) { return [x1, y1]; }   // parallele et hors de la bande -> aucune intersection
+      } else {
+        const t = q[k] / p[k];
+        if (p[k] < 0) { if (t > tIn) { tIn = t; } }
+        else { if (t < tOut) { tOut = t; } }
+      }
+    }
+    const eps = 1e-9;
+    if (tIn < tOut - eps && tIn < 1 - eps) { return [x0 + tIn * dx, y0 + tIn * dy]; }
+    return [x1, y1];
+  }
+
+  // ---- traits de liaison (loupe) entre zone source et encart ----
+  // sourceRect / insetRect : rectangles paper {x0,y0,x1,y1}. Renvoie des segments
+  // { corner, x0,y0,x1,y1 } reliant des coins homonymes. opts.corners : 2 (defaut,
+  // les 2 coins "exterieurs" qui ne traversent rien) ou 4 (tous les coins ; un
+  // segment qui traverse l'encart est coupe a son bord par clipSegmentBeforeRect).
+  // En mode 2, choix par signe relatif des centres : nw/se, sinon ne/sw.
+  function insetConnectorLines(sourceRect, insetRect, opts) {
+    if (!sourceRect || !insetRect) { return []; }
+    opts = opts || {};
+    const sCx = (sourceRect.x0 + sourceRect.x1) / 2;
+    const sCy = (sourceRect.y0 + sourceRect.y1) / 2;
+    const iCx = (insetRect.x0 + insetRect.x1) / 2;
+    const iCy = (insetRect.y0 + insetRect.y1) / 2;
+    const corner = function (rect, name) {
+      return {
+        nw: [rect.x0, rect.y1], ne: [rect.x1, rect.y1],
+        sw: [rect.x0, rect.y0], se: [rect.x1, rect.y0]
+      }[name];
+    };
+    const names = (opts.corners === 4)
+      ? ["nw", "ne", "sw", "se"]
+      : (((iCx - sCx) * (iCy - sCy) >= 0) ? ["nw", "se"] : ["ne", "sw"]);
+    return names.map(function (name) {
+      const s = corner(sourceRect, name);
+      const i = corner(insetRect, name);
+      const end = clipSegmentBeforeRect(s[0], s[1], i[0], i[1], insetRect);
+      return { corner: name, x0: s[0], y0: s[1], x1: end[0], y1: end[1] };
+    });
+  }
+
   return {
+    insetConnectorLines: insetConnectorLines,
     makeInsetCandidates: makeInsetCandidates,
     scoreInsetCandidate: scoreInsetCandidate,
     chooseInsetDomain: chooseInsetDomain,

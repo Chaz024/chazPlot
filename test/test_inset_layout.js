@@ -173,4 +173,71 @@ check("paperRectToPixels: yDomain partiel mappe le bon top (inversion)", functio
   assert.ok(Math.abs(px.height - 80) < 1e-9, "height = 0.4 * 200");
 });
 
+// --- insetConnectorLines ---
+// Relie 2 coins homonymes de la zone source a l'encart, facon loupe : les coins
+// "exterieurs" qui ne traversent ni la source ni l'encart.
+function rectIn(x0, y0, x1, y1){ return { x0: x0, y0: y0, x1: x1, y1: y1 }; }
+function hasCorner(lines, sx, sy, ix, iy){
+  return lines.some(function(l){
+    return Math.abs(l.x0 - sx) < 1e-9 && Math.abs(l.y0 - sy) < 1e-9 &&
+           Math.abs(l.x1 - ix) < 1e-9 && Math.abs(l.y1 - iy) < 1e-9;
+  });
+}
+check("insetConnectorLines: renvoie exactement 2 segments", function () {
+  const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6));
+  assert.strictEqual(lines.length, 2, "doit renvoyer 2 segments");
+});
+check("insetConnectorLines: encart en haut a droite -> coins nw et se", function () {
+  // source bas-gauche, encart haut-droite (separation diagonale)
+  const s = rectIn(0, 0, 2, 2), i = rectIn(4, 4, 6, 6);
+  const lines = IL.insetConnectorLines(s, i);
+  // nw : src(x0,y1)=(0,2) -> inset(0,6) ; se : src(x1,y0)=(2,0) -> inset(6,4)
+  assert.ok(hasCorner(lines, 0, 2, 4, 6), "coin nw attendu");
+  assert.ok(hasCorner(lines, 2, 0, 6, 4), "coin se attendu");
+});
+check("insetConnectorLines: encart en haut a gauche -> coins ne et sw", function () {
+  const s = rectIn(4, 0, 6, 2), i = rectIn(0, 4, 2, 6);
+  const lines = IL.insetConnectorLines(s, i);
+  // ne : src(x1,y1)=(6,2) -> inset(2,6) ; sw : src(x0,y0)=(4,0) -> inset(0,4)
+  assert.ok(hasCorner(lines, 6, 2, 2, 6), "coin ne attendu");
+  assert.ok(hasCorner(lines, 4, 0, 0, 4), "coin sw attendu");
+});
+check("insetConnectorLines: les segments ne croisent pas l'interieur des rects", function () {
+  const s = rectIn(0, 0, 2, 2), i = rectIn(4, 4, 6, 6);
+  const lines = IL.insetConnectorLines(s, i);
+  // milieu de chaque segment ne doit pas tomber dans l'interieur ouvert d'un rect
+  function interiorHit(mx, my, r){ return mx > r.x0 + 1e-9 && mx < r.x1 - 1e-9 && my > r.y0 + 1e-9 && my < r.y1 - 1e-9; }
+  lines.forEach(function(l){
+    const mx = (l.x0 + l.x1) / 2, my = (l.y0 + l.y1) / 2;
+    assert.ok(!interiorHit(mx, my, s) && !interiorHit(mx, my, i), "segment traverse un rect");
+  });
+});
+
+check("insetConnectorLines: chaque segment porte son coin (corner)", function () {
+  const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6));
+  lines.forEach(function(l){ assert.ok(["nw", "ne", "sw", "se"].indexOf(l.corner) >= 0, "corner manquant"); });
+});
+check("insetConnectorLines: mode 4 coins renvoie les 4 coins", function () {
+  const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6), { corners: 4 });
+  assert.strictEqual(lines.length, 4, "doit renvoyer 4 segments");
+  const set = {}; lines.forEach(function(l){ set[l.corner] = true; });
+  ["nw", "ne", "sw", "se"].forEach(function(c){ assert.ok(set[c], "coin " + c + " manquant"); });
+});
+check("insetConnectorLines: 4 coins, le trait qui traverse est coupe au bord de l'encart", function () {
+  // encart haut-droite : le segment 'ne' src(2,2)->inset(6,6) traverse l'encart ;
+  // il doit s'arreter a la 1ere frontiere = coin proche (4,4).
+  const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6), { corners: 4 });
+  const ne = lines.filter(function(l){ return l.corner === "ne"; })[0];
+  assert.ok(ne, "segment ne attendu");
+  assert.ok(Math.abs(ne.x0 - 2) < 1e-9 && Math.abs(ne.y0 - 2) < 1e-9, "part du coin source ne (2,2)");
+  assert.ok(Math.abs(ne.x1 - 4) < 1e-9 && Math.abs(ne.y1 - 4) < 1e-9, "coupe au bord de l'encart (4,4)");
+});
+check("insetConnectorLines: 4 coins, un trait exterieur atteint le coin de l'encart (pas de coupe)", function () {
+  // 'nw' src(0,2)->inset nw(4,6) ne traverse pas l'interieur : reste entier.
+  const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6), { corners: 4 });
+  const nw = lines.filter(function(l){ return l.corner === "nw"; })[0];
+  assert.ok(nw, "segment nw attendu");
+  assert.ok(Math.abs(nw.x1 - 4) < 1e-9 && Math.abs(nw.y1 - 6) < 1e-9, "atteint le coin nw de l'encart (4,6)");
+});
+
 console.log("\n" + passed + " tests OK");

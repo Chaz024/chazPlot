@@ -289,6 +289,25 @@
   }
   .publication-editor .pub-actions{ display:flex; gap:6px; align-items:flex-end; }
   .publication-editor .pub-hint{ width:100%; font-size:11px; color:var(--sp-text-dim); }
+  .inset-connector-editor{
+    position:fixed; right:16px; bottom:16px; z-index:121;
+    display:none; align-items:flex-end; gap:10px; flex-wrap:wrap;
+    max-width:calc(100vw - 32px); padding:10px;
+    border:1px solid var(--sp-border); border-radius:8px;
+    background:var(--sp-surface); color:var(--sp-text);
+    box-shadow:var(--sp-shadow-2);
+  }
+  .inset-connector-editor label{ display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--sp-text-dim); }
+  .inset-connector-editor select{
+    min-width:90px; height:28px; padding:2px 8px;
+    border:1px solid var(--vscode-input-border, var(--sp-border)); border-radius:6px;
+    background:var(--vscode-input-background); color:var(--vscode-input-foreground);
+    font-family:inherit; font-size:12px;
+  }
+  .inset-connector-editor .ice-lines{ display:flex; flex-direction:column; gap:6px; }
+  .inset-connector-editor .ice-line{ flex-direction:row; align-items:center; gap:8px; }
+  .inset-connector-editor .ice-line span{ min-width:84px; }
+  .inset-connector-editor input[type=range]{ width:130px; }
   .annotation-editor{
     position:fixed; right:16px; bottom:16px; z-index:122;
     display:none; align-items:flex-end; gap:8px; flex-wrap:wrap;
@@ -568,6 +587,17 @@
       <button class="compact" id="pubClose">Fermer</button>
     </span>
     <span class="pub-hint">Le preset est previsualise immediatement.</span>
+  </div>
+
+  <div class="inset-connector-editor" id="insetConnectorEditor" role="dialog" aria-label="Traits de liaison de l'encart">
+    <label>Coins
+      <select id="iceCorners">
+        <option value="2">2 coins</option>
+        <option value="4">4 coins</option>
+      </select>
+    </label>
+    <div class="ice-lines" id="iceLines"></div>
+    <button class="compact" id="iceClose">Fermer</button>
   </div>
 
   <div class="annotation-editor" id="annotationEditor" role="dialog" aria-label="Annotation">
@@ -1195,6 +1225,21 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     });
   }
 
+  // Rectangle paper de la zone source (selection) — meme conversion que
+  // chooseInsetDomain, isolee pour les traits de liaison. Renvoie null si la
+  // zone n'est pas convertible.
+  function sourcePaperRect(baseData, baseLayout, selection){
+    const xAxis = baseLayout[selection.xaxisKey] || {};
+    const yAxis = baseLayout[selection.yaxisKey] || {};
+    const xDomain = Array.isArray(xAxis.domain) ? xAxis.domain : [0.08, 0.96];
+    const yDomain = Array.isArray(yAxis.domain) ? yAxis.domain : [0.12, 0.94];
+    const traces = matchingAxisTraces(baseData, selection.xRef, selection.yRef);
+    const xFull = fullAxisRange(baseLayout, traces, selection.xaxisKey, "x");
+    const yFull = fullAxisRange(baseLayout, traces, selection.yaxisKey, "y");
+    if (!xFull || !yFull){ return null; }
+    return selectionPaperRect(baseLayout, selection, xFull, yFull, xDomain, yDomain, xAxis, yAxis);
+  }
+
   function nextAxisIndex(layout){
     let max = 1;
     Object.keys(layout || {}).forEach(function(key){
@@ -1362,6 +1407,10 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   // ----------------------------------------------------------
   const INSET_MIN_SIZE = 0.12;
   const INSET_CORNERS = ["nw", "ne", "sw", "se"];
+  // Etat par defaut des traits de liaison : 2 coins, opacite 0.5 par coin.
+  function defaultInsetConnector(){
+    return { corners: 2, opacity: { nw: 0.5, ne: 0.5, sw: 0.5, se: 0.5 } };
+  }
 
   function mountInsetOverlay(el){
     if (el._spInsetOverlay){ return el._spInsetOverlay; }
@@ -1372,6 +1421,12 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     overlay.className = "inset-overlay";
     overlay.addEventListener("pointerdown", function(ev){
       if (ev.target !== overlay){ return; }      // une poignee gere son resize
+      // Ctrl/Cmd+clic = ouvrir l'editeur des traits de liaison (pas de drag).
+      if (ev.ctrlKey || ev.metaKey){
+        ev.preventDefault(); ev.stopPropagation();
+        openInsetConnectorEditor(el);
+        return;
+      }
       startInsetDrag(el, ev, InsetLayout.movePlacement);
     });
     // Clic droit sur l'encart = l'effacer.
@@ -1496,6 +1551,27 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       line: { color: "rgba(55,148,255,0.95)", width: 2 },
       editable: false
     });
+    // Traits de liaison facon loupe : relient des coins de la zone source aux
+    // coins homonymes de l'encart. Etat porte par el (nombre de coins 2/4 +
+    // opacite par coin), pilote par Ctrl+clic sur l'encart -> insetConnectorEditor.
+    // Les coins actifs sont memorises pour que l'editeur liste un curseur/ligne.
+    const connector = el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector());
+    el._spInsetConnectorActive = [];
+    const srcRect = sourcePaperRect(baseData, baseLayout, selection);
+    if (srcRect){
+      const insetRect = { x0: placement.xDomain[0], x1: placement.xDomain[1], y0: placement.yDomain[0], y1: placement.yDomain[1] };
+      InsetLayout.insetConnectorLines(srcRect, insetRect, { corners: connector.corners }).forEach(function(seg){
+        el._spInsetConnectorActive.push(seg.corner);
+        const op = (connector.opacity && connector.opacity[seg.corner] != null) ? connector.opacity[seg.corner] : 0.5;
+        if (op <= 0){ return; }   // coin a 0 = ligne masquee
+        shapes.push({
+          type: "line", xref: "paper", yref: "paper",
+          x0: seg.x0, y0: seg.y0, x1: seg.x1, y1: seg.y1,
+          line: { color: "rgba(55,148,255," + op + ")", width: 1.5 },
+          editable: false, layer: "below"
+        });
+      });
+    }
     baseLayout.shapes = shapes;
     const annotations = insetAnnotations(baseLayout, selection, placement, insetXRef, insetYRef);
     if (annotations.length){
@@ -2242,6 +2318,56 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     previewPublicationStyle();
   }
 
+  // Editeur des traits de liaison (loupe) de l'encart, ouvert par Ctrl+clic sur
+  // l'encart : choix 2/4 coins + un curseur d'opacite par ligne (apercu live,
+  // re-applique l'encart en conservant selection/placement).
+  let insetConnectorTarget = null;
+  const ICE_CORNER_LABELS = { nw: "Haut-gauche", ne: "Haut-droite", sw: "Bas-gauche", se: "Bas-droite" };
+  function refreshInsetConnector(el){
+    if (el && el._spHasInset && el._spInsetSelection){
+      applyZoomInset(el, el._spInsetSelection, el._spInsetPlacement);
+    }
+  }
+  // (Re)construit la liste des curseurs : un par ligne active (coins memorises
+  // dans el._spInsetConnectorActive par applyZoomInset).
+  function buildInsetConnectorLines(el){
+    const box = document.getElementById("iceLines");
+    if (!box){ return; }
+    box.textContent = "";
+    const c = el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector());
+    const active = (el._spInsetConnectorActive && el._spInsetConnectorActive.length)
+      ? el._spInsetConnectorActive
+      : (c.corners === 4 ? ["nw", "ne", "sw", "se"] : ["nw", "se"]);
+    active.forEach(function(corner){
+      const label = document.createElement("label");
+      label.className = "ice-line";
+      const span = document.createElement("span");
+      span.textContent = ICE_CORNER_LABELS[corner] || corner;
+      const input = document.createElement("input");
+      input.type = "range"; input.min = "0"; input.max = "1"; input.step = "0.05";
+      input.value = (c.opacity && c.opacity[corner] != null) ? c.opacity[corner] : 0.5;
+      input.addEventListener("input", function(){
+        (c.opacity || (c.opacity = {}))[corner] = parseFloat(input.value);
+        refreshInsetConnector(el);
+      });
+      label.appendChild(span); label.appendChild(input);
+      box.appendChild(label);
+    });
+  }
+  function openInsetConnectorEditor(el){
+    if (!el || !el._spHasInset){ return; }
+    insetConnectorTarget = el;
+    const c = el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector());
+    document.getElementById("iceCorners").value = String(c.corners || 2);
+    buildInsetConnectorLines(el);
+    document.getElementById("insetConnectorEditor").style.display = "flex";
+  }
+  function closeInsetConnectorEditor(){
+    const box = document.getElementById("insetConnectorEditor");
+    if (box){ box.style.display = "none"; }
+    insetConnectorTarget = null;
+  }
+
   function gridPatch(axisKey, gridMode, values){
     const light = gridMode === "light";
     const full = gridMode === "full";
@@ -2378,6 +2504,19 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     if (apply){ apply.addEventListener("click", commitPublicationStyle); }
     const close = document.getElementById("pubClose");
     if (close){ close.addEventListener("click", function(){ closePublicationEditor(false); }); }
+  })();
+
+  (function initInsetConnectorEditor(){
+    const corners = document.getElementById("iceCorners");
+    const close = document.getElementById("iceClose");
+    if (corners){ corners.addEventListener("change", function(){
+      const el = insetConnectorTarget;
+      if (!el){ return; }
+      (el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector())).corners = parseInt(corners.value, 10);
+      refreshInsetConnector(el);     // recalcule les coins actifs
+      buildInsetConnectorLines(el);  // reconstruit les curseurs (jeu de coins change)
+    }); }
+    if (close){ close.addEventListener("click", closeInsetConnectorEditor); }
   })();
 
   document.getElementById("leClose").addEventListener("click", closeLegendEditor);
