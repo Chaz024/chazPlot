@@ -304,6 +304,15 @@ function updateFigureTrace(id, traceIndex, patch) {
   try { storage.save(fig); } catch (e) { /* best-effort */ }
 }
 
+function appendFigureTrace(id, trace) {
+  const fig = figures.find(function (f) { return f.id === id; });
+  if (!fig || !fig.plotly || !trace || typeof trace !== "object") { return; }
+  if (!Array.isArray(fig.plotly.data)) { fig.plotly.data = []; }
+  fig.plotly.data.push(trace);
+  fig.edited = true;
+  try { storage.save(fig); } catch (e) { /* best-effort */ }
+}
+
 // Persiste une edition de layout (titre du graphe, labels d'axes) faite au
 // clic dans le webview (Plotly editable). patch = cles pointees, ex.
 // { "title.text": "...", "xaxis.title.text": "..." }.
@@ -521,8 +530,12 @@ function finishPlotlyExport(msg) {
   const request = pendingExports[msg.requestId];
   if (!request) { return; }
   delete pendingExports[msg.requestId];
+  const batch = request.batch || null;   // export groupe (saveAll) : compte agrege
   if (!msg.ok) {
-    vscode.window.showErrorMessage("Chaz Plots : echec de l'export Plotly (" + String(msg.error || "erreur inconnue") + ")");
+    if (!batch) {
+      vscode.window.showErrorMessage("Chaz Plots : echec de l'export Plotly (" + String(msg.error || "erreur inconnue") + ")");
+    }
+    if (batch) { finishExportBatchTick(batch); }
     return;
   }
   try {
@@ -533,9 +546,22 @@ function finishPlotlyExport(msg) {
     } else {
       writeDataUrl(request.filePath, msg.dataUrl);
     }
-    vscode.window.showInformationMessage("Figure exportee : " + request.filePath);
+    if (batch) { batch.written = batch.written + 1; }
+    else { vscode.window.showInformationMessage("Figure exportee : " + request.filePath); }
   } catch (err) {
-    vscode.window.showErrorMessage("Chaz Plots : echec de l'ecriture de l'export (" + String(err) + ")");
+    if (!batch) {
+      vscode.window.showErrorMessage("Chaz Plots : echec de l'ecriture de l'export (" + String(err) + ")");
+    }
+  }
+  if (batch) { finishExportBatchTick(batch); }
+}
+
+// Decremente le lot d'export (saveAll) et affiche le bilan quand tout est revenu.
+function finishExportBatchTick(batch) {
+  batch.remaining = batch.remaining - 1;
+  if (batch.remaining <= 0) {
+    vscode.window.showInformationMessage(
+      "Chaz Plots : " + String(batch.syncCount + batch.written) + " figure(s) enregistrée(s) dans " + batch.dir);
   }
 }
 // Export CSV des donnees visibles d'une figure. Le webview detient la figure
@@ -650,20 +676,37 @@ function saveAll() {
     if (!uris || uris.length === 0) { return; }
     const dir = uris[0].fsPath;
     const cfg = vscode.workspace.getConfiguration("chazPlots");
-    const ext = cfg.get("saveFormat", "png");
-    let count = 0;
+    // Le lot ne gere que png/svg (pdf retombe sur png) : pas de prompt par figure.
+    const ext = cfg.get("saveFormat", "png") === "svg" ? "svg" : "png";
+    const scale = Math.max(0.25, Number(cfg.get("dpi", 200)) / 96);
+    let syncCount = 0;
+    const pending = [];   // figures Plotly : pas d'asset png/svg -> export via webview
     for (let i = 0; i < figures.length; i = i + 1) {
       const fig = figures[i];
       const name = String(i + 1).padStart(2, "0") + "_" + defaultName(fig, ext);
-      try {
-        if (writeFigure(fig, path.join(dir, name))) {
-          count = count + 1;
-        }
-      } catch (e) {
-        // on continue avec les suivantes
+      const filePath = path.join(dir, name);
+      let wrote = false;
+      try { wrote = writeFigure(fig, filePath); } catch (e) { wrote = false; }
+      if (wrote) {
+        syncCount = syncCount + 1;
+      } else if (fig.plotly && !fig.frames) {
+        pending.push({ fig: fig, filePath: filePath });
       }
     }
-    vscode.window.showInformationMessage("Chaz Plots : " + String(count) + " figure(s) enregistrée(s) dans " + dir);
+    if (pending.length === 0) {
+      vscode.window.showInformationMessage("Chaz Plots : " + String(syncCount) + " figure(s) enregistrée(s) dans " + dir);
+      return;
+    }
+    // Figures Plotly interactives : seul le webview detient le rendu vivant. On
+    // demande un export image par figure (meme mecanique que saveOne) et on
+    // agrege le compte final dans finishPlotlyExport via le marqueur `batch`.
+    const batch = { remaining: pending.length, written: 0, syncCount: syncCount, dir: dir };
+    const options = { format: ext, scale: scale, transparent: false };
+    pending.forEach(function (item) {
+      const requestId = String(nextExportRequestId++);
+      pendingExports[requestId] = { filePath: item.filePath, title: item.fig.title, nativePdf: null, batch: batch };
+      postToWebview({ type: "exportPlotly", id: item.fig.id, requestId: requestId, options: options });
+    });
   });
 }
 
@@ -708,6 +751,7 @@ function setupPanel(p) {
     else if (msg.type === "pasteFigure") { pasteFigure(); }
     else if (msg.type === "updateTags") { updateTags(msg.id, msg.tags); }
     else if (msg.type === "updateFigure") { updateFigureTrace(msg.id, msg.traceIndex, msg.patch); }
+    else if (msg.type === "appendFigureTrace") { appendFigureTrace(msg.id, msg.trace); }
     else if (msg.type === "updateFigureLayout") { updateFigureLayout(msg.id, msg.patch); }
     else if (msg.type === "editTags") { editTags(msg.id); }
     else if (msg.type === "saveAll") { saveAll(); }

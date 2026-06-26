@@ -47,11 +47,12 @@
   /* ----- Barre d'outils ----- */
   .toolbar{
     position:sticky; top:0; z-index:20;
-    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-    padding:10px 16px;
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:4px 14px;
     background: var(--sp-surface-2);
     border-bottom:1px solid var(--sp-border);
   }
+  .toolbar button{ padding:4px 9px; }
   .toolbar .brand{ font-weight:600; letter-spacing:.2px; display:flex; align-items:center; gap:8px; }
   .toolbar .brand .dot{ width:9px; height:9px; border-radius:50%;
     background: var(--sp-accent); box-shadow:0 0 0 3px var(--sp-accent-soft); }
@@ -270,6 +271,9 @@
   .legend-editor .le-text{ min-width:230px; }
   .legend-editor[data-mode="trace"] .le-text-field{ display:none; }
   .legend-editor[data-mode="text"] .le-trace-field{ display:none; }
+  .legend-editor:not([data-guide="true"]) .le-guide-field{ display:none; }
+  .legend-editor[data-mode="text"] .le-guide-field{ display:none; }
+  .legend-editor[data-guide="true"] .le-marker-field{ display:none; }
   .legend-editor .le-inline{ flex-direction:row; align-items:center; gap:6px; height:26px; }
   .legend-editor .le-inline input{ min-width:0; width:auto; height:auto; }
   .publication-editor{
@@ -298,12 +302,14 @@
     box-shadow:var(--sp-shadow-2);
   }
   .inset-connector-editor label{ display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--sp-text-dim); }
-  .inset-connector-editor select{
+  .inset-connector-editor select,
+  .inset-connector-editor input[type=number]{
     min-width:90px; height:28px; padding:2px 8px;
     border:1px solid var(--vscode-input-border, var(--sp-border)); border-radius:6px;
     background:var(--vscode-input-background); color:var(--vscode-input-foreground);
     font-family:inherit; font-size:12px;
   }
+  .inset-connector-editor input[type=number]{ width:70px; min-width:0; }
   .inset-connector-editor .ice-lines{ display:flex; flex-direction:column; gap:6px; }
   .inset-connector-editor .ice-line{ flex-direction:row; align-items:center; gap:8px; }
   .inset-connector-editor .ice-line span{ min-width:84px; }
@@ -492,6 +498,12 @@
     .inset-handle-ne { right: -6px; top: -6px; cursor: nesw-resize; }
     .inset-handle-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
     .inset-handle-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+    /* Overlay de la zone source (rectangle a agrandir) : sous l'overlay de
+       l'encart ; corps = deplacer la zone, poignees = ajuster ses bords. */
+    .inset-source-overlay {
+      position: absolute; box-sizing: border-box; z-index: 4;
+      cursor: move; background: transparent; touch-action: none;
+    }
 </style>
 </head>
 <body class="fit">
@@ -536,7 +548,7 @@
       <span class="otitle" id="ovTitle"></span>
       <span class="spacer"></span>
       <span class="coords" id="ovCoords"></span>
-      <button id="ovClose">Fermer ✕</button>
+      <button id="ovClose" class="textbtn">Fermer ✕</button>
     </div>
     <div class="obody" id="ovBody"></div>
   </div>
@@ -550,13 +562,13 @@
         Opacite autres
         <input type="range" id="compareOpacity" min="0" max="100" value="55">
       </label>
-      <button id="compareClose">Fermer x</button>
-      <button id="errorToggle" class="compact" disabled title="Disponible uniquement en superposition interactive (Plotly) avec au moins 2 courbes">Erreur</button>
+      <button id="errorToggle" class="textbtn" disabled title="Disponible uniquement en superposition interactive (Plotly) avec au moins 2 courbes">Erreur</button>
       <span class="error-warn" id="errorWarn"></span>
-      <button id="compareSave" class="compact" title="Enregistrer (PNG / SVG / PDF)">Enregistrer</button>
-      <button id="compareCopy" class="compact" title="Copier l'image dans le presse-papiers">Copier</button>
-      <button id="compareCsv" class="compact" title="Exporter les donnees visibles en CSV">CSV</button>
-      <button id="compareBundle" class="compact" title="Exporter un dossier publication">Bundle</button>
+      <button id="compareCopy" class="textbtn" title="Copier l image dans le presse-papiers">Copier</button>
+      <button id="compareSave" class="textbtn" title="Enregistrer cette comparaison (PNG, SVG ou PDF)">Enregistrer</button>
+      <button id="compareCsv" class="textbtn" title="Exporter les donnees visibles en CSV, en respectant le zoom courant">Exporter CSV</button>
+      <button id="compareBundle" class="textbtn" title="Exporter un dossier avec figure.png, figure.svg, metadata.json et figure.tex">Bundle publication</button>
+      <button id="compareClose" class="textbtn">Fermer ✕</button>
     </div>
     <div class="error-panel" id="errorPanel" style="display:none">
       <span id="errorSummary" class="error-summary">Cliquez une courbe : 1re = référence, suivantes = à comparer. Ctrl+clic = nouvelle référence.</span>
@@ -566,9 +578,9 @@
         <label><input type="checkbox" class="error-type" value="rel"> Erreur relative</label>
         <label><input type="checkbox" class="error-type" value="relpct"> Erreur relative %</label>
       </span>
-      <button id="errorApply" class="compact">Appliquer</button>
-      <button id="errorReset" class="compact">Reinitialiser</button>
-      <button id="errorHide" class="compact">Masquer</button>
+      <button id="errorApply" class="textbtn">Appliquer</button>
+      <button id="errorReset" class="textbtn">Reinitialiser</button>
+      <button id="errorHide" class="textbtn">Masquer</button>
     </div>
     <div class="compare-body" id="compareBody"></div>
   </div>
@@ -589,12 +601,16 @@
     <span class="pub-hint">Le preset est previsualise immediatement.</span>
   </div>
 
-  <div class="inset-connector-editor" id="insetConnectorEditor" role="dialog" aria-label="Traits de liaison de l'encart">
+  <div class="inset-connector-editor" id="insetConnectorEditor" role="dialog" aria-label="Reglages de l'encart">
     <label>Coins
       <select id="iceCorners">
+        <option value="0">Aucun</option>
         <option value="2">2 coins</option>
         <option value="4">4 coins</option>
       </select>
+    </label>
+    <label>Graduations
+      <input id="iceTicks" type="number" min="2" max="20" step="1" value="6">
     </label>
     <label>Couleur
       <div class="le-swatches" id="iceColors" aria-label="Couleurs de base"></div>
@@ -617,6 +633,7 @@
       <details class="le-advanced"><summary>Avance</summary>
         <input id="annArrowColor" type="color" value="#000000"></details>
     </label>
+    <label>Epaisseur fleche <input id="annArrowWidth" type="number" min="0.5" max="20" step="0.5" value="2"></label>
     <label class="ann-inline"><input id="annShowArrow" type="checkbox" checked> Fleche</label>
     <button class="compact primary" id="annApply">Appliquer</button>
     <button class="compact" id="annDelete">Supprimer</button>
@@ -645,8 +662,11 @@
     </details>
     <label class="le-trace-field">Trait <select id="leDash"></select></label>
     <label class="le-trace-field">Epaisseur <input id="leWidth" type="number" min="0.2" max="20" step="0.2" value="2"></label>
-    <label class="le-trace-field">Marqueur <select id="leSymbol"></select></label>
-    <label class="le-trace-field">Taille <input id="leMarkerSize" type="number" min="1" max="40" step="1" value="6"></label>
+    <label class="le-trace-field le-guide-field"><span id="leGuideCoordLabel">Coordonnee</span><input id="leGuideCoord" type="number" step="any" value="0"></label>
+    <label class="le-trace-field le-guide-field"><span id="leGuideStartLabel">Debut</span><input id="leGuideStart" type="number" step="any" value="0"></label>
+    <label class="le-trace-field le-guide-field"><span id="leGuideEndLabel">Fin</span><input id="leGuideEnd" type="number" step="any" value="1"></label>
+    <label class="le-trace-field le-marker-field">Marqueur <select id="leSymbol"></select></label>
+    <label class="le-trace-field le-marker-field">Taille <input id="leMarkerSize" type="number" min="1" max="40" step="1" value="6"></label>
     <button class="compact primary" id="leApply">Appliquer</button>
     <button class="compact" id="leClose">Fermer</button>
   </div>
@@ -1297,7 +1317,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   // Config d'un axe d'encart derivee de l'axe de base : cadre net (showline +
   // mirror), sans grille, petits ticks, pour le domaine (place) et le range
   // (zone zoomee) donnes.
-  function insetAxis(baseAxis, domain, anchor, range){
+  function insetAxis(baseAxis, domain, anchor, range, nticks){
     const axis = Object.assign({}, baseAxis || {});
     axis.domain = domain;
     axis.anchor = anchor;
@@ -1310,6 +1330,17 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     axis.ticks = "outside";
     axis.tickfont = Object.assign({}, axis.tickfont || {}, { size: 9 });
     axis.linecolor = axis.linecolor || "rgba(60,60,60,0.9)";
+    // Densite de graduation : on impose des ticks "ronds" auto (nticks = max),
+    // en ecartant toute graduation explicite heritee de la figure d'origine
+    // (l'encart est une sous-plage rezoomee, ses ticks lui sont propres).
+    if (nticks && nticks > 0){
+      axis.tickmode = "auto";
+      axis.nticks = nticks;
+      delete axis.dtick;
+      delete axis.tick0;
+      delete axis.tickvals;
+      delete axis.ticktext;
+    }
     delete axis.scaleanchor;
     delete axis.matches;
     delete axis.rangeslider;
@@ -1412,9 +1443,11 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   const INSET_CORNERS = ["nw", "ne", "sw", "se"];
   // Couleur par defaut de l'encart (bleu accent VS Code = rgb(55,148,255)).
   const INSET_DEFAULT_COLOR = "#3794ff";
-  // Etat par defaut des traits de liaison : couleur, 2 coins, opacite 0.5 par coin.
+  // Etat par defaut de l'encart : couleur, 2 coins relies, opacite 0.5 par coin,
+  // et nticks = densite de graduation des axes de l'encart (max de ticks "ronds"
+  // par axe, applique a X et Y ; reste discret).
   function defaultInsetConnector(){
-    return { color: INSET_DEFAULT_COLOR, corners: 2, opacity: { nw: 0.5, ne: 0.5, sw: 0.5, se: 0.5 } };
+    return { color: INSET_DEFAULT_COLOR, corners: 2, nticks: 6, opacity: { nw: 0.5, ne: 0.5, sw: 0.5, se: 0.5 } };
   }
 
   function mountInsetOverlay(el){
@@ -1455,6 +1488,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   }
 
   function positionInsetOverlay(el){
+    positionInsetSourceOverlay(el);   // les deux overlays suivent les memes recalculs
     const overlay = el._spInsetOverlay;
     const placement = el._spInsetPlacement;
     const size = el._fullLayout && el._fullLayout._size;
@@ -1512,6 +1546,127 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     target.addEventListener("pointerup", onUp);
   }
 
+  // ----------------------------------------------------------
+  // Overlay HTML de la ZONE SOURCE (rectangle a agrandir, en coords donnees).
+  // Permet d'ajuster la selection apres coup (mauvais zoom) : corps = deplacer,
+  // 4 coins = redimensionner. On opere en espace paper (via InsetLayout.* comme
+  // l'encart) puis on reconvertit en valeurs d'axe ; l'encart garde sa place.
+  // ----------------------------------------------------------
+  const INSET_SOURCE_MIN_SIZE = 0.03;
+
+  // Mapping paper <-> valeur d'axe pour un axe rendu (lit _fullLayout : range en
+  // unites d'axe, lineaire en paper meme pour log/date).
+  function axisPaperMap(el, axisKey){
+    const ax = (el._fullLayout && el._fullLayout[axisKey]) || {};
+    const range = Array.isArray(ax.range) ? [Number(ax.range[0]), Number(ax.range[1])] : null;
+    const domain = Array.isArray(ax.domain) ? ax.domain : null;
+    if (!range || !domain || range[0] === range[1]){ return null; }
+    return {
+      domain: domain,
+      toPaper: function(v){ return domain[0] + (v - range[0]) / (range[1] - range[0]) * (domain[1] - domain[0]); },
+      toValue: function(p){ return range[0] + (p - domain[0]) / (domain[1] - domain[0]) * (range[1] - range[0]); }
+    };
+  }
+  // Selection (xRange/yRange) -> rectangle paper {xDomain,yDomain} (ordonnes).
+  function sourcePlacementFromSelection(el, sel){
+    const mx = axisPaperMap(el, sel.xaxisKey);
+    const my = axisPaperMap(el, sel.yaxisKey);
+    if (!mx || !my){ return null; }
+    const xs = [mx.toPaper(sel.xRange[0]), mx.toPaper(sel.xRange[1])].sort(function(a, b){ return a - b; });
+    const ys = [my.toPaper(sel.yRange[0]), my.toPaper(sel.yRange[1])].sort(function(a, b){ return a - b; });
+    return { xDomain: xs, yDomain: ys };
+  }
+  function mountInsetSourceOverlay(el){
+    if (el._spInsetSourceOverlay){ return el._spInsetSourceOverlay; }
+    const wrap = el.parentElement;
+    if (!wrap){ return null; }
+    if (getComputedStyle(wrap).position === "static"){ wrap.style.position = "relative"; }
+    const overlay = document.createElement("div");
+    overlay.className = "inset-source-overlay";
+    overlay.title = "Glisser pour deplacer la zone agrandie ; coins pour ajuster ; clic droit pour effacer";
+    overlay.addEventListener("pointerdown", function(ev){
+      if (ev.target !== overlay){ return; }       // une poignee gere son resize
+      if (ev.ctrlKey || ev.metaKey){ return; }
+      startInsetSourceDrag(el, ev, InsetLayout.movePlacement);
+    });
+    overlay.addEventListener("contextmenu", function(ev){ ev.preventDefault(); clearZoomInset(el); });
+    INSET_CORNERS.forEach(function(corner){
+      const h = document.createElement("div");
+      h.className = "inset-handle inset-handle-" + corner;
+      h.addEventListener("pointerdown", function(ev){
+        startInsetSourceDrag(el, ev, function(p, dx, dy){
+          return InsetLayout.resizePlacement(p, corner, dx, dy, INSET_SOURCE_MIN_SIZE);
+        });
+      });
+      overlay.appendChild(h);
+    });
+    wrap.appendChild(overlay);
+    el._spInsetSourceOverlay = overlay;
+    return overlay;
+  }
+  function positionInsetSourceOverlay(el){
+    const overlay = el._spInsetSourceOverlay;
+    const sel = el._spInsetSelection;
+    const size = el._fullLayout && el._fullLayout._size;
+    if (!overlay || !sel || !size){ return; }
+    const placement = sourcePlacementFromSelection(el, sel);
+    if (!placement){ return; }
+    const box = InsetLayout.paperRectToPixels(placement, size);
+    overlay.style.left = (el.offsetLeft + box.left) + "px";
+    overlay.style.top = (el.offsetTop + box.top) + "px";
+    overlay.style.width = box.width + "px";
+    overlay.style.height = box.height + "px";
+  }
+  function unmountInsetSourceOverlay(el){
+    const overlay = el._spInsetSourceOverlay;
+    if (overlay && overlay.parentElement){ overlay.parentElement.removeChild(overlay); }
+    el._spInsetSourceOverlay = null;
+  }
+  function startInsetSourceDrag(el, ev, transform){
+    const sel = el._spInsetSelection;
+    const size = el._fullLayout && el._fullLayout._size;
+    const placement = el._spInsetPlacement;
+    if (!sel || !size){ return; }
+    const startPlacement = sourcePlacementFromSelection(el, sel);
+    const mx = axisPaperMap(el, sel.xaxisKey);
+    const my = axisPaperMap(el, sel.yaxisKey);
+    if (!startPlacement || !mx || !my){ return; }
+    ev.preventDefault();
+    ev.stopPropagation();
+    const target = ev.currentTarget;
+    try { target.setPointerCapture(ev.pointerId); } catch (e) {}
+    const startX = ev.clientX, startY = ev.clientY;
+    const xDomain = mx.domain, yDomain = my.domain;
+    let raf = null, pending = null;
+    function onMove(e){
+      pending = e;
+      if (raf){ return; }
+      raf = requestAnimationFrame(function(){
+        raf = null;
+        const d = InsetLayout.pixelDeltaToPaper(pending.clientX - startX, pending.clientY - startY, size);
+        const next = transform(startPlacement, d.dx, d.dy);
+        const paper = InsetLayout.clampPlacement(
+          { x0: next.xDomain[0], x1: next.xDomain[1], y0: next.yDomain[0], y1: next.yDomain[1] },
+          xDomain, yDomain, INSET_SOURCE_MIN_SIZE);
+        const newSel = Object.assign({}, sel, {
+          xRange: [mx.toValue(paper.xDomain[0]), mx.toValue(paper.xDomain[1])],
+          yRange: [my.toValue(paper.yDomain[0]), my.toValue(paper.yDomain[1])]
+        });
+        el._spInsetSelection = newSel;
+        applyZoomInset(el, newSel, placement);
+        positionInsetSourceOverlay(el);
+      });
+    }
+    function onUp(e){
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      try { target.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (raf){ cancelAnimationFrame(raf); raf = null; }
+    }
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+  }
+
   // Cree (ou recree) l'encart : ajoute une paire d'axes + les traces zoomees +
   // deux rectangles (zone source en pointilles, bordure de l'encart), re-rend
   // via Plotly, puis monte l'overlay HTML de deplacement/resize. placementOverride
@@ -1536,12 +1691,15 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     const insetYRef = "y" + axisIndex;
     additions.forEach(function(trace){ trace.xaxis = insetXRef; trace.yaxis = insetYRef; });
 
-    baseLayout[insetXKey] = insetAxis(baseLayout[selection.xaxisKey], placement.xDomain, insetYRef, selection.xRange);
-    baseLayout[insetYKey] = insetAxis(baseLayout[selection.yaxisKey], placement.yDomain, insetXRef, selection.yRange);
-
-    // Etat des traits de liaison (porte aussi la couleur de l'encart : zone
-    // source + bordure + traits). col(a) = couleur choisie a l'opacite a.
+    // Etat de l'encart (couleur, coins relies, densite de graduation). col(a) =
+    // couleur choisie a l'opacite a. Porte aussi la couleur de l'encart (zone
+    // source + bordure + traits).
     const connector = el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector());
+    const insetNticks = (connector.nticks && connector.nticks > 0) ? connector.nticks : 0;
+
+    baseLayout[insetXKey] = insetAxis(baseLayout[selection.xaxisKey], placement.xDomain, insetYRef, selection.xRange, insetNticks);
+    baseLayout[insetYKey] = insetAxis(baseLayout[selection.yaxisKey], placement.yDomain, insetXRef, selection.yRange, insetNticks);
+
     const col = function(a){
       return (typeof LegendEdit !== "undefined" && LegendEdit.hexToRgba)
         ? LegendEdit.hexToRgba(connector.color || INSET_DEFAULT_COLOR, a)
@@ -1594,6 +1752,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     const baseConfig = el._spConfig || plotlyConfig(el._spFig || {});
     Plotly.react(el, baseData.concat(additions), baseLayout, baseConfig);
     mountInsetOverlay(el);
+    mountInsetSourceOverlay(el);
     requestAnimationFrame(function(){ positionInsetOverlay(el); });
   }
 
@@ -1605,6 +1764,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     el._spInsetSelection = null;
     el._spInsetPlacement = null;
     unmountInsetOverlay(el);
+    unmountInsetSourceOverlay(el);
     Plotly.react(el, clone(el._spBaseData || []), baseLayoutForPlot(el), el._spConfig || plotlyConfig(el._spFig || {}));
   }
 
@@ -1868,7 +2028,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   // En vue liste, le patch est persiste via extension.js ; en comparaison il
   // reste de session.
   // ----------------------------------------------------------
-  let legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "", originalTrace: null, applied: false };
+  let legendEditTarget = { mode: "trace", el: null, idx: -1, shapeIndex: -1, textKey: "", fontSizeKey: "", originalTrace: null, originalShape: null, applied: false };
 
   function normalizedTitleText(value){
     if (typeof LegendEdit === "undefined"){ return value == null ? "" : String(value); }
@@ -1948,6 +2108,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
 
   function markerModePatch(trace, values){
     if (!trace || trace.type && trace.type !== "scatter"){ return {}; }
+    if (isGuideTrace(trace)){ return { mode: "lines" }; }
     const original = String(trace.mode || "lines");
     const keepText = original.split("+").indexOf("text") >= 0;
     const wantsLine = values.dash !== "none";
@@ -1959,10 +2120,159 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     return { mode: parts.length ? parts.join("+") : "lines" };
   }
 
+  function isGuideTrace(trace){
+    return !!(trace && trace._spGuideLine && (trace._spGuideLine.kind === "h" || trace._spGuideLine.kind === "v"));
+  }
+
+  function guideKind(trace){ return isGuideTrace(trace) ? trace._spGuideLine.kind : null; }
+
+  function finiteNumber(value, fallback){
+    const n = Number(value);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function guideGeometryValues(trace){
+    const kind = guideKind(trace) || "h";
+    const x = Array.isArray(trace && trace.x) ? trace.x : [];
+    const y = Array.isArray(trace && trace.y) ? trace.y : [];
+    if (kind === "v"){
+      const coord = finiteNumber(x[0], 0);
+      return { kind: kind, coord: coord, start: finiteNumber(y[0], 0), end: finiteNumber(y[1], 1) };
+    }
+    const coord = finiteNumber(y[0], 0);
+    return { kind: kind, coord: coord, start: finiteNumber(x[0], 0), end: finiteNumber(x[1], 1) };
+  }
+
+  function readGuideGeometryForm(trace){
+    const base = guideGeometryValues(trace || {});
+    return {
+      kind: base.kind,
+      coord: finiteNumber(document.getElementById("leGuideCoord").value, base.coord),
+      start: finiteNumber(document.getElementById("leGuideStart").value, base.start),
+      end: finiteNumber(document.getElementById("leGuideEnd").value, base.end)
+    };
+  }
+
+  function guideGeometryPatch(trace){
+    if (!isGuideTrace(trace)){ return {}; }
+    const g = readGuideGeometryForm(trace);
+    if (g.kind === "v"){
+      return { x: [g.coord, g.coord], y: [g.start, g.end], "_spGuideLine.kind": "v" };
+    }
+    return { x: [g.start, g.end], y: [g.coord, g.coord], "_spGuideLine.kind": "h" };
+  }
+
+  function plotlyRestylePatch(patch){
+    const out = {};
+    Object.keys(patch || {}).forEach(function(key){
+      out[key] = ((key === "x" || key === "y") && Array.isArray(patch[key])) ? [patch[key]] : patch[key];
+    });
+    return out;
+  }
+
+  function updateGuideEditorLabels(trace){
+    const kind = guideKind(trace);
+    const coord = document.getElementById("leGuideCoordLabel");
+    const start = document.getElementById("leGuideStartLabel");
+    const end = document.getElementById("leGuideEndLabel");
+    if (!kind){ return; }
+    if (kind === "v"){
+      if (coord){ coord.textContent = "X"; }
+      if (start){ start.textContent = "Y debut"; }
+      if (end){ end.textContent = "Y fin"; }
+    } else {
+      if (coord){ coord.textContent = "Y"; }
+      if (start){ start.textContent = "X debut"; }
+      if (end){ end.textContent = "X fin"; }
+    }
+  }
+  function isGuideShape(shape){
+    if (!shape || shape.type !== "line"){ return false; }
+    if (shape._spGuideLine && (shape._spGuideLine.kind === "h" || shape._spGuideLine.kind === "v")){ return true; }
+    return /^__spGuideLine:(h|v)$/.test(String(shape.name || ""));
+  }
+
+  function guideShapeKind(shape){
+    if (shape && shape._spGuideLine && shape._spGuideLine.kind){ return shape._spGuideLine.kind; }
+    const m = /^__spGuideLine:(h|v)$/.exec(String(shape && shape.name || ""));
+    if (m){ return m[1]; }
+    if (shape && Number(shape.x0) === Number(shape.x1)){ return "v"; }
+    return "h";
+  }
+
+  function guideShapeGeometryValues(shape){
+    const kind = guideShapeKind(shape);
+    if (kind === "v"){
+      return { kind: "v", coord: finiteNumber(shape.x0, 0), start: finiteNumber(shape.y0, 0), end: finiteNumber(shape.y1, 1) };
+    }
+    return { kind: "h", coord: finiteNumber(shape.y0, 0), start: finiteNumber(shape.x0, 0), end: finiteNumber(shape.x1, 1) };
+  }
+
+  function updateGuideShapeEditorLabels(shape){
+    const kind = guideShapeKind(shape);
+    updateGuideEditorLabels({ _spGuideLine: { kind: kind } });
+  }
+
+  function readGuideShapeForm(shape){
+    const base = guideShapeGeometryValues(shape || {});
+    const color = document.getElementById("leColor").value;
+    const dash = document.getElementById("leDash").value;
+    const width = Number(document.getElementById("leWidth").value);
+    const coord = finiteNumber(document.getElementById("leGuideCoord").value, base.coord);
+    const start = finiteNumber(document.getElementById("leGuideStart").value, base.start);
+    const end = finiteNumber(document.getElementById("leGuideEnd").value, base.end);
+    const out = clone(shape || {});
+    out.type = "line";
+    out.xref = out.xref || "x";
+    out.yref = out.yref || "y";
+    out.name = "__spGuideLine:" + base.kind;
+    out._spGuideLine = { kind: base.kind, xref: out.xref, yref: out.yref };
+    out.line = Object.assign({}, out.line || {}, {
+      color: LegendEdit.toHexColor(color, "#7f7f7f"),
+      width: isFinite(width) && width > 0 ? width : 1.5,
+      dash: dash === "none" ? "solid" : dash
+    });
+    out.editable = false;
+    if (base.kind === "v"){
+      out.x0 = coord; out.x1 = coord; out.y0 = start; out.y1 = end;
+    } else {
+      out.x0 = start; out.x1 = end; out.y0 = coord; out.y1 = coord;
+    }
+    return out;
+  }
+
+  function guideShapesArray(el){
+    return clone((el && el.layout && Array.isArray(el.layout.shapes)) ? el.layout.shapes : []);
+  }
+
+  function setGuideShape(el, index, shape, persist){
+    if (!el || index < 0){ return; }
+    const shapes = guideShapesArray(el);
+    shapes[index] = shape;
+    const patch = { shapes: shapes };
+    try { Plotly.relayout(el, patch); } catch (e) {}
+    if (persist){ persistLayoutPatch(el, patch); }
+    else if (el._spBaseLayout){ LegendEdit.applyPatch(el._spBaseLayout, patch); }
+  }
+
+  function livePreviewGuideShape(){
+    const t = legendEditTarget;
+    if (t.mode !== "guideShape" || !t.el || t.shapeIndex < 0 || !t.originalShape || typeof LegendEdit === "undefined"){ return; }
+    setGuideShape(t.el, t.shapeIndex, readGuideShapeForm(t.originalShape), false);
+  }
+
+  function restoreGuideShapePreview(){
+    const t = legendEditTarget;
+    if (t.mode !== "guideShape" || t.applied || !t.el || t.shapeIndex < 0 || !t.originalShape){ return; }
+    setGuideShape(t.el, t.shapeIndex, clone(t.originalShape), false);
+  }
+
   function legendRestylePatch(values){
     const t = legendEditTarget;
     const v = values || legendTraceValues();
-    const patch = Object.assign(LegendEdit.buildRestyle(v), markerModePatch(t.originalTrace || (t.el && t.el.data && t.el.data[t.idx]), v));
+    const trace = t.originalTrace || (t.el && t.el.data && t.el.data[t.idx]);
+    const patch = Object.assign(LegendEdit.buildRestyle(v), markerModePatch(trace, v));
+    Object.assign(patch, guideGeometryPatch(trace));
     if (v.dash === "none" && !v.symbol){ patch["marker.symbol"] = "circle"; }
     return patch;
   }
@@ -1970,8 +2280,9 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   // Restyle la trace ciblee en direct, SANS persister.
   function livePreviewLegendTrace(values){
     const t = legendEditTarget;
+    if (t.mode === "guideShape"){ livePreviewGuideShape(); return; }
     if (t.mode !== "trace" || !t.el || t.idx < 0 || typeof LegendEdit === "undefined"){ return; }
-    try { Plotly.restyle(t.el, legendRestylePatch(values), [t.idx]); } catch (e) {}
+    try { Plotly.restyle(t.el, plotlyRestylePatch(legendRestylePatch(values)), [t.idx]); } catch (e) {}
   }
 
   function restoreLegendTracePreview(){
@@ -1979,8 +2290,13 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     if (t.mode !== "trace" || t.applied || !t.el || t.idx < 0 || !t.originalTrace){ return; }
     const v = LegendEdit.readTrace(t.originalTrace);
     const patch = Object.assign(LegendEdit.buildRestyle(v), { mode: t.originalTrace.mode || undefined });
+    if (isGuideTrace(t.originalTrace)){
+      patch.x = Array.isArray(t.originalTrace.x) ? t.originalTrace.x.slice() : [];
+      patch.y = Array.isArray(t.originalTrace.y) ? t.originalTrace.y.slice() : [];
+      patch["_spGuideLine.kind"] = t.originalTrace._spGuideLine.kind;
+    }
     if (patch.mode === undefined){ delete patch.mode; }
-    try { Plotly.restyle(t.el, patch, [t.idx]); } catch (e) {}
+    try { Plotly.restyle(t.el, plotlyRestylePatch(patch), [t.idx]); } catch (e) {}
   }
 
   function renderPicker(){
@@ -2075,11 +2391,11 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     fillLegendSelect(document.getElementById("leDash"), LegendEdit.LINE_DASHES);
     fillLegendSelect(document.getElementById("leSymbol"), LegendEdit.MARKER_SYMBOLS);
     renderColorSwatches(document.getElementById("leBaseColors"), LegendEdit.BASE_COLORS);
-    ["leName", "leDash", "leWidth", "leSymbol", "leMarkerSize"].forEach(function(id){
+    ["leName", "leDash", "leWidth", "leSymbol", "leMarkerSize", "leGuideCoord", "leGuideStart", "leGuideEnd"].forEach(function(id){
       const input = document.getElementById(id);
       if (!input){ return; }
       input.addEventListener(id === "leName" ? "input" : "change", function(){ livePreviewLegendTrace(); });
-      if (id === "leWidth" || id === "leMarkerSize"){
+      if (id === "leWidth" || id === "leMarkerSize" || id === "leGuideCoord" || id === "leGuideStart" || id === "leGuideEnd"){
         input.addEventListener("input", function(){ livePreviewLegendTrace(); });
       }
     });
@@ -2087,15 +2403,20 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
 
   function closeLegendEditor(){
     restoreLegendTracePreview();
+    restoreGuideShapePreview();
     const box = document.getElementById("legendEditor");
     if (box){ box.style.display = "none"; }
-    legendEditTarget = { mode: "trace", el: null, idx: -1, textKey: "", fontSizeKey: "", originalTrace: null, applied: false };
+    legendEditTarget = { mode: "trace", el: null, idx: -1, shapeIndex: -1, textKey: "", fontSizeKey: "", originalTrace: null, originalShape: null, applied: false };
   }
 
   function showLegendEditor(mode){
     const box = document.getElementById("legendEditor");
     if (!box){ return; }
     box.dataset.mode = mode;
+    const trace = legendEditTarget && legendEditTarget.el && legendEditTarget.idx >= 0
+      ? legendEditTarget.el.data[legendEditTarget.idx]
+      : null;
+    box.dataset.guide = ((mode === "trace" && isGuideTrace(trace)) || mode === "guideShape") ? "true" : "false";
     box.style.display = "flex";
   }
 
@@ -2103,7 +2424,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     if (!el || !el.data || !el.data[idx] || typeof LegendEdit === "undefined"){ return; }
     closeAnnotationEditor();
     closePublicationEditor();
-    legendEditTarget = { mode: "trace", el: el, idx: idx, textKey: "", fontSizeKey: "", originalTrace: clone(el.data[idx]), applied: false };
+    legendEditTarget = { mode: "trace", el: el, idx: idx, shapeIndex: -1, textKey: "", fontSizeKey: "", originalTrace: clone(el.data[idx]), originalShape: null, applied: false };
     const v = LegendEdit.readTrace(el.data[idx]);
     document.getElementById("leName").value = v.name;
     document.getElementById("leColor").value = LegendEdit.toHexColor(v.color, "#1f77b4");
@@ -2112,15 +2433,42 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     document.getElementById("leWidth").value = String(v.width);
     document.getElementById("leSymbol").value = v.symbol;
     document.getElementById("leMarkerSize").value = String(v.markerSize);
+    if (isGuideTrace(el.data[idx])){
+      const g = guideGeometryValues(el.data[idx]);
+      updateGuideEditorLabels(el.data[idx]);
+      document.getElementById("leGuideCoord").value = String(g.coord);
+      document.getElementById("leGuideStart").value = String(g.start);
+      document.getElementById("leGuideEnd").value = String(g.end);
+    }
     showLegendEditor("trace");
   }
 
+  function openGuideShapeEditor(el, shapeIndex){
+    const shapes = (el && el.layout && Array.isArray(el.layout.shapes)) ? el.layout.shapes : [];
+    const shape = shapes[shapeIndex];
+    if (!el || !shape || !isGuideShape(shape) || typeof LegendEdit === "undefined"){ return; }
+    closeAnnotationEditor();
+    closePublicationEditor();
+    legendEditTarget = { mode: "guideShape", el: el, idx: -1, shapeIndex: shapeIndex, textKey: "", fontSizeKey: "", originalTrace: null, originalShape: clone(shape), applied: false };
+    const line = shape.line || {};
+    const g = guideShapeGeometryValues(shape);
+    document.getElementById("leName").value = g.kind === "v" ? "vline" : "hline";
+    document.getElementById("leColor").value = LegendEdit.toHexColor(line.color, "#7f7f7f");
+    setPickerFromHex(LegendEdit.toHexColor(line.color, "#7f7f7f"));
+    document.getElementById("leDash").value = line.dash || "solid";
+    document.getElementById("leWidth").value = String(line.width || 1.5);
+    updateGuideShapeEditorLabels(shape);
+    document.getElementById("leGuideCoord").value = String(g.coord);
+    document.getElementById("leGuideStart").value = String(g.start);
+    document.getElementById("leGuideEnd").value = String(g.end);
+    showLegendEditor("guideShape");
+  }
   function openTextEditor(el, target){
     if (!el || !target || !target.key || typeof LegendEdit === "undefined"){ return; }
     closeAnnotationEditor();
     closePublicationEditor();
     const style = LegendEdit.textStyle(target.text);
-    legendEditTarget = { mode: "text", el: el, idx: -1, textKey: target.key, fontSizeKey: textFontSizeKey(target.key), originalTrace: null, applied: false };
+    legendEditTarget = { mode: "text", el: el, idx: -1, shapeIndex: -1, textKey: target.key, fontSizeKey: textFontSizeKey(target.key), originalTrace: null, originalShape: null, applied: false };
     document.getElementById("leTextValue").value = LegendEdit.latexToPlainText(style.text);
     document.getElementById("leFontSize").value = String(textFontSize(el.layout || el._spBaseLayout || {}, target.key, target.defaultSize || 14));
     document.getElementById("leBold").checked = !!style.bold;
@@ -2130,7 +2478,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
 
   function setLegendEditFeedback(el, coordsEl){
     if (el.parentElement){ el.parentElement.classList.toggle("sp-legend-armed", !!el._spLegendEditArmed); }
-    if (coordsEl){ coordsEl.textContent = el._spLegendEditArmed ? "Mode edition : cliquez une entree de legende, un titre ou un axe" : ""; }
+    if (coordsEl){ coordsEl.textContent = el._spLegendEditArmed ? "Mode edition : cliquez une entree de legende, un titre ou un axe ; glissez un label d'axe pour le deplacer" : ""; }
   }
 
   function persistLegendPatch(el, idx, patch){
@@ -2164,7 +2512,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   }
 
   function restyleLegendTrace(el, idx, patch){
-    try { Plotly.restyle(el, patch, [idx]); } catch (e) {}
+    try { Plotly.restyle(el, plotlyRestylePatch(patch), [idx]); } catch (e) {}
     persistLegendPatch(el, idx, patch);
   }
 
@@ -2191,6 +2539,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     Object.keys(update || {}).forEach(function(k){
       if (k === "title.text" || /^[xy]axis\d*\.title\.text$/.test(k)){
         patch[k] = typeof LegendEdit !== "undefined" ? LegendEdit.latexToPlainText(update[k]) : update[k];
+      } else if (/^shapes\[\d+\]\.(x0|x1|y0|y1)$/.test(k)){
+        patch[k] = update[k];
       } else if (/^annotations\[\d+\]\.(ax|ay|x|y)$/.test(k)){
         // Glisser la pointe (annotationTail) ou l'ancre (annotationPosition)
         // d'une annotation -> persister la nouvelle geometrie de la fleche.
@@ -2350,7 +2700,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     const c = el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector());
     const active = (el._spInsetConnectorActive && el._spInsetConnectorActive.length)
       ? el._spInsetConnectorActive
-      : (c.corners === 4 ? ["nw", "ne", "sw", "se"] : ["nw", "se"]);
+      : (c.corners === 0 ? [] : (c.corners === 4 ? ["nw", "ne", "sw", "se"] : ["nw", "se"]));
     active.forEach(function(corner){
       const label = document.createElement("label");
       label.className = "ice-line";
@@ -2371,7 +2721,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     if (!el || !el._spHasInset){ return; }
     insetConnectorTarget = el;
     const c = el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector());
-    document.getElementById("iceCorners").value = String(c.corners || 2);
+    document.getElementById("iceCorners").value = String(c.corners != null ? c.corners : 2);
+    document.getElementById("iceTicks").value = String(c.nticks || 6);
     buildInsetConnectorLines(el);
     document.getElementById("insetConnectorEditor").style.display = "flex";
   }
@@ -2521,6 +2872,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
 
   (function initInsetConnectorEditor(){
     const corners = document.getElementById("iceCorners");
+    const ticks = document.getElementById("iceTicks");
     const close = document.getElementById("iceClose");
     if (corners){ corners.addEventListener("change", function(){
       const el = insetConnectorTarget;
@@ -2528,6 +2880,16 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       (el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector())).corners = parseInt(corners.value, 10);
       refreshInsetConnector(el);     // recalcule les coins actifs
       buildInsetConnectorLines(el);  // reconstruit les curseurs (jeu de coins change)
+    }); }
+    // Densite de graduation des axes de l'encart (nticks, applique a X et Y).
+    if (ticks){ ticks.addEventListener("input", function(){
+      const el = insetConnectorTarget;
+      if (!el){ return; }
+      let n = parseInt(ticks.value, 10);
+      if (!isFinite(n)){ return; }
+      n = Math.max(2, Math.min(20, n));
+      (el._spInsetConnector || (el._spInsetConnector = defaultInsetConnector())).nticks = n;
+      refreshInsetConnector(el);
     }); }
     // Pastilles de couleurs de base (memes que l'editeur de legende) : recolore
     // l'encart entier (zone source + bordure + traits).
@@ -2556,6 +2918,13 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     if (!el || typeof LegendEdit === "undefined"){ return; }
     if (legendEditTarget.mode === "text"){
       applyLegendLayoutPatch(el, buildTextLayoutPatch());
+      closeLegendEditor();
+      return;
+    }
+    if (legendEditTarget.mode === "guideShape"){
+      const shape = readGuideShapeForm(legendEditTarget.originalShape || {});
+      legendEditTarget.applied = true;
+      setGuideShape(el, legendEditTarget.shapeIndex, shape, true);
       closeLegendEditor();
       return;
     }
@@ -2656,12 +3025,66 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     el._spLegendTextEditorAttached = true;
     el.addEventListener("click", function(ev){
       if (!el._spLegendEditArmed){ return; }
+      // Un glissement de label vient de se terminer : ne pas ouvrir l'editeur.
+      if (el._spSuppressLegendClick){ el._spSuppressLegendClick = false; return; }
       const target = findEditableTextTarget(el, ev.target, ev);
       if (!target){ return; }
       ev.preventDefault();
       ev.stopPropagation();
       openTextEditor(el, target);
     }, true);
+  }
+
+  // Mode edition legende : GLISSER un label d'axe (xtitle/ytitle) le deplace.
+  // Au-dela d'un petit seuil de mouvement, on detache le label en annotation paper
+  // (detachAxisTitleToAnnotation) puis on suit le curseur (drag custom). Un simple
+  // clic (sans mouvement) tombe dans attachLegendTextEditor -> editeur de texte.
+  function attachAxisLabelDrag(el){
+    if (!el || el._spAxisLabelDragBound){ return; }
+    el._spAxisLabelDragBound = true;
+    let st = null;   // { axisKey, textEl, startX, startY, dragging, idx, pointerId }
+    el.addEventListener("pointerdown", function(ev){
+      if (!el._spLegendEditArmed || ev.button !== 0){ return; }
+      let textEl = ev.target && ev.target.closest ? ev.target.closest("text") : null;
+      if (!textEl){ textEl = textNodeAtPoint(el, ev.clientX, ev.clientY); }
+      const cls = textEl ? (textEl.getAttribute("class") || "") : "";
+      if (!textEl || (cls.indexOf("xtitle") < 0 && cls.indexOf("ytitle") < 0)){ return; }
+      const info = classifyEditableTextTarget(el, textEl);
+      if (!info || !/^[xy]axis\d*\.title\.text$/.test(info.key)){ return; }
+      // On n'empeche pas le clic : un clic sans mouvement doit ouvrir l'editeur.
+      st = { axisKey: info.key, textEl: textEl, startX: ev.clientX, startY: ev.clientY,
+             dragging: false, idx: -1, pointerId: ev.pointerId };
+    }, true);
+    el.addEventListener("pointermove", function(ev){
+      if (!st){ return; }
+      if (!st.dragging){
+        if (Math.abs(ev.clientX - st.startX) + Math.abs(ev.clientY - st.startY) < 5){ return; }
+        st.dragging = true;
+        st.idx = detachAxisTitleToAnnotation(el, st.textEl, st.axisKey, true);  // sans editeur
+        if (st.idx < 0){ st = null; return; }
+        try { el.setPointerCapture(st.pointerId); } catch (e) {}
+      }
+      ev.preventDefault();
+      const p = annotationPaperAtClient(el, ev.clientX, ev.clientY);
+      if (p){
+        const upd = {};
+        upd["annotations[" + st.idx + "].x"] = p.x;
+        upd["annotations[" + st.idx + "].y"] = p.y;
+        try { Plotly.relayout(el, upd); } catch (e) {}
+      }
+    }, true);
+    function endDrag(ev){
+      if (!st){ return; }
+      if (st.dragging && st.idx >= 0){
+        ev.preventDefault(); ev.stopPropagation();
+        persistAnnotations(el, annotationArray(el));   // position finale persistee
+        try { el.releasePointerCapture(st.pointerId); } catch (e) {}
+        el._spSuppressLegendClick = true;              // tue le clic qui suit
+      }
+      st = null;
+    }
+    el.addEventListener("pointerup", endDrag, true);
+    el.addEventListener("pointercancel", endDrag, true);
   }
 
   let annotationTarget = { el: null, index: -1, original: null };
@@ -2690,7 +3113,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
 
   function setAnnotationFeedback(el, coordsEl){
     if (el.parentElement){ el.parentElement.classList.toggle("sp-annotation-armed", !!el._spAnnotationArmed); }
-    if (coordsEl){ coordsEl.textContent = el._spAnnotationArmed ? "Mode annotation : clic = texte, Ctrl+clic = texte + fleche ; clic sur une annotation pour l'editer, clic droit pour la supprimer, glisser la pointe pour orienter" : ""; }
+    if (coordsEl){ coordsEl.textContent = el._spAnnotationArmed ? "Mode annotation : clique n'importe ou (clic = texte, Ctrl+clic = texte + fleche) ; clic sur une annotation pour l'editer, clic droit pour la supprimer, glisser la pointe pour orienter" : ""; }
   }
 
   function annotationArray(el){
@@ -2736,6 +3159,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     document.getElementById("annFontSize").value = String((ann.font && ann.font.size) || 14);
     document.getElementById("annBold").checked = !!style.bold;
     document.getElementById("annArrowColor").value = LegendEdit.toHexColor(ann.arrowcolor || "#000000", "#000000");
+    document.getElementById("annArrowWidth").value = String(ann.arrowwidth || 2);
     document.getElementById("annShowArrow").checked = ann.showarrow !== false;
   }
 
@@ -2748,6 +3172,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     ann.showarrow = !!document.getElementById("annShowArrow").checked;
     ann.arrowhead = ann.arrowhead || 2;
     ann.arrowcolor = arrowColor;
+    ann.arrowwidth = Math.max(0.5, Number(document.getElementById("annArrowWidth").value) || 2);
     ann.font = Object.assign({}, ann.font || {}, {
       color: color,
       size: Number(document.getElementById("annFontSize").value) || 14
@@ -2764,31 +3189,221 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     document.getElementById("annotationEditor").style.display = "flex";
   }
 
-  function createAnnotationFromPoint(el, pt, withArrow){
-    if (!el || !pt){ return; }
-    const xref = pt.xaxis && pt.xaxis._id ? pt.xaxis._id : "x";
-    const yref = pt.yaxis && pt.yaxis._id ? pt.yaxis._id : "y";
+  function createAnnotationAt(el, x, y, xref, yref, withArrow){
+    if (!el){ return; }
     const annotations = annotationArray(el);
     const ann = {
-      text: "", x: pt.x, y: pt.y, xref: xref, yref: yref,
-      showarrow: !!withArrow, arrowhead: 2, ax: 40, ay: -40,
+      text: "", x: x, y: y, xref: xref || "x", yref: yref || "y",
+      showarrow: !!withArrow, arrowhead: 2, arrowwidth: 2, ax: 40, ay: -40,
       arrowcolor: "#000000", font: { color: "#000000", size: 14 }
     };
     annotations.push(ann);
     persistAnnotations(el, annotations);
     openAnnotationEditor(el, annotations.length - 1, ann);
   }
+  // Position paper (aire de trace) d'un point ecran -> {x,y} pour annotation paper.
+  function annotationPaperAtClient(el, clientX, clientY){
+    const size = el._fullLayout && el._fullLayout._size;
+    if (!size){ return null; }
+    const bb = el.getBoundingClientRect();
+    return { x: (clientX - bb.left - size.l) / size.w, y: 1 - (clientY - bb.top - size.t) / size.h };
+  }
+  // Convertit un label d'axe (xaxis/yaxis .title) en annotation paper deplacable,
+  // a sa position actuelle (lue dans le SVG) : on vide le titre d'axe et on pose
+  // une annotation equivalente. Permet de bouger les labels comme le titre (qui
+  // est deja une annotation cote convertisseur). textEl = le <text> du label.
+  // noEditor : ne pas ouvrir l'editeur (cas du drag). Renvoie l'index, ou -1.
+  function detachAxisTitleToAnnotation(el, textEl, axisTitleKey, noEditor){
+    if (!el || !textEl || typeof Plotly === "undefined" || typeof LegendEdit === "undefined"){ return -1; }
+    const size = el._fullLayout && el._fullLayout._size;
+    if (!size){ return -1; }
+    const aKey = axisTitleKey.replace(/\.title\.text$/, "");   // "xaxis" / "yaxis2"
+    const isY = aKey.charAt(0) === "y";
+    const title = ((el.layout || {})[aKey] || {}).title || {};
+    const labelText = LegendEdit.titleText(title);
+    if (!labelText){ return -1; }                              // rien a deplacer
+    // Position paper actuelle (centre du <text>), via la taille de l'aire de trace.
+    const bb = el.getBoundingClientRect(), r = textEl.getBoundingClientRect();
+    const paperX = ((r.left + r.right) / 2 - bb.left - size.l) / size.w;
+    const paperY = 1 - ((r.top + r.bottom) / 2 - bb.top - size.t) / size.h;
+    const ann = {
+      text: labelText, x: paperX, y: paperY, xref: "paper", yref: "paper",
+      xanchor: "center", yanchor: "middle", showarrow: false,
+      textangle: isY ? -90 : 0,                                // ylabel : vertical
+      font: Object.assign({ size: 14 }, title.font || {})
+    };
+    // Vide le titre d'axe (live + persistance), puis pose l'annotation deplacable.
+    const titlePatch = {}; titlePatch[axisTitleKey] = "";
+    try { Plotly.relayout(el, titlePatch); } catch (e) {}
+    persistLayoutPatch(el, titlePatch);
+    const annotations = annotationArray(el);
+    annotations.push(ann);
+    const idx = annotations.length - 1;
+    persistAnnotations(el, annotations);
+    if (!noEditor){ openAnnotationEditor(el, idx, ann); }
+    return idx;
+  }
+  // Coordonnees donnees au point du clic (n'importe ou, pas seulement sur un
+  // point). Reutilise navAxes + r2l/l2r (gere log/date/subplots). Renvoie aussi
+  // les refs d'axe (xref/yref) du subplot survole, ou null si hors aire de trace.
+  function dataCoordsAtEvent(el, ev){
+    if (!el || !el._fullLayout){ return null; }
+    const bb = el.getBoundingClientRect();
+    const px = ev.clientX - bb.left, py = ev.clientY - bb.top;
+    function pick(letter, p){
+      const axes = navAxes(el, letter);
+      for (let i = 0; i < axes.length; i++){
+        const ax = axes[i].ax, d = p - ax._offset;
+        if (d >= 0 && d <= ax._length){ return ax; }
+      }
+      return null;
+    }
+    const ax = pick("x", px), ay = pick("y", py);
+    if (!ax || !ay){ return null; }
+    const fx = (px - ax._offset) / ax._length;
+    const fy = 1 - (py - ay._offset) / ay._length;
+    const lx0 = ax.r2l(ax.range[0]), lx1 = ax.r2l(ax.range[1]);
+    const ly0 = ay.r2l(ay.range[0]), ly1 = ay.r2l(ay.range[1]);
+    return {
+      x: ax.l2r(lx0 + fx * (lx1 - lx0)),
+      y: ay.l2r(ly0 + fy * (ly1 - ly0)),
+      xref: ax._id || "x", yref: ay._id || "y"
+    };
+  }
 
+  // Axe Plotly (_fullLayout) par identifiant de reference ("x", "y2", ...).
+  function guideAxisById(el, id){
+    const fl = el && el._fullLayout;
+    if (!fl){ return null; }
+    for (const key in fl){
+      const ax = fl[key];
+      if (ax && ax._id === id && typeof ax.r2l === "function"
+          && isFinite(ax._offset) && isFinite(ax._length) && ax.range){ return ax; }
+    }
+    return null;
+  }
+  // Pixel (relatif au conteneur) d'une valeur de donnees sur un axe. horizontal
+  // => X croissant a droite ; vertical => Y croissant vers le haut (1 - frac).
+  // Meme math que dataCoordsAtEvent (r2l + _offset), valable log/date.
+  function guideValuePixel(ax, value, horizontal){
+    const l0 = ax.r2l(ax.range[0]), l1 = ax.r2l(ax.range[1]), l = ax.r2l(value);
+    if (!(l1 - l0)){ return null; }
+    const frac = (l - l0) / (l1 - l0);
+    return horizontal ? ax._offset + frac * ax._length
+                      : ax._offset + (1 - frac) * ax._length;
+  }
+  const GUIDE_HIT_THRESH = 6;   // tolerance perpendiculaire en pixels
+
+  // Index de la guide-TRACE (hline/vline convertie depuis matplotlib : une trace
+  // scatter a 2 points) qui longe le clic, ou -1. Compare la position pixel du
+  // clic a celle de la ligne constante, en bornant a son etendue sur l'autre axe.
+  function guideTraceIndexAtClient(el, clientX, clientY){
+    if (!el || !el._fullLayout || !Array.isArray(el.data)){ return -1; }
+    const bb = el.getBoundingClientRect();
+    const px = clientX - bb.left, py = clientY - bb.top;
+    let best = -1, bestDist = GUIDE_HIT_THRESH + 1;
+    for (let i = 0; i < el.data.length; i++){
+      const tr = el.data[i];
+      if (!isGuideTrace(tr) || !Array.isArray(tr.x) || !Array.isArray(tr.y)){ continue; }
+      const ax = guideAxisById(el, tr.xaxis || "x"), ay = guideAxisById(el, tr.yaxis || "y");
+      if (!ax || !ay){ continue; }
+      if (tr._spGuideLine.kind === "h"){
+        const yC = guideValuePixel(ay, tr.y[0], false);
+        const x0 = guideValuePixel(ax, tr.x[0], true), x1 = guideValuePixel(ax, tr.x[1], true);
+        if (yC == null || x0 == null || x1 == null){ continue; }
+        if (px < Math.min(x0, x1) - 4 || px > Math.max(x0, x1) + 4){ continue; }
+        const d = Math.abs(py - yC);
+        if (d < bestDist){ bestDist = d; best = i; }
+      } else {
+        const xC = guideValuePixel(ax, tr.x[0], true);
+        const y0 = guideValuePixel(ay, tr.y[0], false), y1 = guideValuePixel(ay, tr.y[1], false);
+        if (xC == null || y0 == null || y1 == null){ continue; }
+        if (py < Math.min(y0, y1) - 4 || py > Math.max(y0, y1) + 4){ continue; }
+        const d = Math.abs(px - xC);
+        if (d < bestDist){ bestDist = d; best = i; }
+      }
+    }
+    return best;
+  }
+
+  // Index de la guide-SHAPE (ligne H/V ajoutee dans le webview : shape Plotly
+  // `line`) qui longe le clic, ou -1. Detection GEOMETRIQUE (pas via l'index DOM
+  // du path : une shape editable rend des `<path>` de poignees supplementaires
+  // qui decalent paths.indexOf -> mauvais index). Meme math que les traces.
+  function guideShapeIndexAtClient(el, clientX, clientY){
+    const shapes = (el && el.layout && Array.isArray(el.layout.shapes)) ? el.layout.shapes : [];
+    if (!el._fullLayout || !shapes.length){ return -1; }
+    const bb = el.getBoundingClientRect();
+    const px = clientX - bb.left, py = clientY - bb.top;
+    let best = -1, bestDist = GUIDE_HIT_THRESH + 1;
+    for (let i = 0; i < shapes.length; i++){
+      const sh = shapes[i];
+      if (!isGuideShape(sh)){ continue; }
+      const ax = guideAxisById(el, sh.xref || "x"), ay = guideAxisById(el, sh.yref || "y");
+      if (!ax || !ay){ continue; }
+      if (guideShapeKind(sh) === "h"){
+        const yC = guideValuePixel(ay, sh.y0, false);
+        const x0 = guideValuePixel(ax, sh.x0, true), x1 = guideValuePixel(ax, sh.x1, true);
+        if (yC == null || x0 == null || x1 == null){ continue; }
+        if (px < Math.min(x0, x1) - 4 || px > Math.max(x0, x1) + 4){ continue; }
+        const d = Math.abs(py - yC);
+        if (d < bestDist){ bestDist = d; best = i; }
+      } else {
+        const xC = guideValuePixel(ax, sh.x0, true);
+        const y0 = guideValuePixel(ay, sh.y0, false), y1 = guideValuePixel(ay, sh.y1, false);
+        if (xC == null || y0 == null || y1 == null){ continue; }
+        if (py < Math.min(y0, y1) - 4 || py > Math.max(y0, y1) + 4){ continue; }
+        const d = Math.abs(px - xC);
+        if (d < bestDist){ bestDist = d; best = i; }
+      }
+    }
+    return best;
+  }
+
+  function attachGuideTraceEditor(el){
+    if (!el || el._spGuideTraceBound){ return; }
+    el._spGuideTraceBound = true;
+    // Plotly n'emet de plotly_click que pres d'un SOMMET d'une trace ligne ; un
+    // clic au milieu du segment d'une hline/vline (2 points) ne declenche donc
+    // rien. On intercepte le mousedown en phase capture (avant le drag-zoom de
+    // Plotly) et on ouvre l'editeur si le clic longe une guide-trace ou -shape.
+    el.addEventListener("mousedown", function(ev){
+      if (!el._spLegendEditArmed || ev.button !== 0){ return; }
+      const shapeIdx = guideShapeIndexAtClient(el, ev.clientX, ev.clientY);
+      if (shapeIdx >= 0){
+        ev.preventDefault(); ev.stopPropagation();
+        openGuideShapeEditor(el, shapeIdx);
+        return;
+      }
+      const idx = guideTraceIndexAtClient(el, ev.clientX, ev.clientY);
+      if (idx < 0){ return; }
+      ev.preventDefault(); ev.stopPropagation();
+      openLegendEditor(el, idx);
+    }, true);
+  }
   function attachAnnotationEditor(el){
     if (!el || el._spAnnotationBound){ return; }
     el._spAnnotationBound = true;
     el.addEventListener("click", function(ev){
       if (!el._spAnnotationArmed){ return; }
       const idx = annotationIndexFromTarget(el, ev.target, ev);
-      if (idx < 0){ return; }
-      const annotations = annotationArray(el);
+      if (idx >= 0){
+        // Clic sur une annotation existante -> l'editer.
+        const annotations = annotationArray(el);
+        ev.preventDefault(); ev.stopPropagation();
+        openAnnotationEditor(el, idx, annotations[idx]);
+        return;
+      }
+      // Sinon : creer une annotation N'IMPORTE OU dans l'aire de trace (fond ou
+      // courbe), pas seulement sur un point. On exclut les clics hors trace
+      // (modebar, legende, marges, ticks). Position approximative : deplacable.
+      const surface = ev.target && ev.target.closest && ev.target.closest(".draglayer, .cartesianlayer");
+      if (!surface){ return; }
+      const pt = dataCoordsAtEvent(el, ev);
+      if (!pt){ return; }
       ev.preventDefault(); ev.stopPropagation();
-      openAnnotationEditor(el, idx, annotations[idx]);
+      const withArrow = !!(ev.ctrlKey || ev.metaKey);   // Ctrl/Cmd+clic = avec fleche
+      createAnnotationAt(el, pt.x, pt.y, pt.xref, pt.yref, withArrow);
     }, true);
     // Clic droit sur une annotation (texte ou fleche) = la supprimer.
     el.addEventListener("contextmenu", function(ev){
@@ -2807,16 +3422,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       annotations.splice(idx, 1);
       persistAnnotations(el, annotations);
     }, true);
-    if (el.on){
-      el.on("plotly_click", function(ev){
-        if (!el._spAnnotationArmed){ return; }
-        const pt = ev && ev.points && ev.points[0];
-        if (!pt || (pt.data && (pt.data._spMeasure || pt.data._spInsetClone))){ return; }
-        // Clic = texte seul ; Ctrl/Cmd+clic = texte + fleche.
-        const withArrow = !!(ev && ev.event && (ev.event.ctrlKey || ev.event.metaKey));
-        createAnnotationFromPoint(el, pt, withArrow);
-      });
-    }
+    // (La creation passe par le listener DOM 'click' ci-dessus, qui marche
+    // n'importe ou dans l'aire de trace, pas seulement sur un point Plotly.)
   }
 
   // Preview en direct : chaque modification d'un champ reecrit l'annotation
@@ -2829,7 +3436,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     persistAnnotations(el, annotations);
   }
   ["annText", "annTextColor", "annFontSize", "annBold", "annArrowColor",
-   "annShowArrow"].forEach(function(id){
+   "annArrowWidth", "annShowArrow"].forEach(function(id){
     const input = document.getElementById(id);
     if (!input){ return; }
     const evt = (input.type === "text" || input.type === "number") ? "input" : "change";
@@ -2881,7 +3488,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       responsive: true,
       displaylogo: false,
       scrollZoom: false,
-      edits: { legendPosition: true, titleText: false, axisTitleText: false, annotationPosition: true, annotationTail: true },
+      edits: { legendPosition: true, titleText: false, axisTitleText: false, annotationPosition: true, annotationTail: true, shapePosition: true },
       // zoom/pan/auto-echelle/reinitialiser sont deplaces dans le menu "..." (toolsMenu)
       modeBarButtonsToRemove: ["select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "toImage",
         "zoom2d", "pan2d", "autoScale2d", "resetScale2d"]
@@ -2906,11 +3513,34 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     const fallback = (list && list.clientWidth) || document.documentElement.clientWidth || 700;
     return Math.max(300, Math.floor(rectW || clientW || fallback));
   }
+  // Hauteur du "chrome" de la carte au-dessus du graphe (en-tete avec les boutons
+  // d'export + provenance + tags) : distance entre le haut de la .plotwrap et le
+  // haut de la .card. Independante de la hauteur du graphe ; fallback 96 sinon.
+  function cardChromeHeight(el){
+    const wrap = el && el.parentElement;       // .plotwrap
+    const card = wrap && wrap.parentElement;   // .card
+    if (!card || !wrap){ return 96; }
+    try {
+      const top = wrap.getBoundingClientRect().top - card.getBoundingClientRect().top;
+      return (isFinite(top) && top > 0) ? top : 96;
+    } catch (e){ return 96; }
+  }
+  // Hauteur du bandeau du haut : on mesure l'element .toolbar (sticky, hauteur
+  // STABLE quel que soit le scroll) et surtout PAS list.top, qui devient negatif
+  // des qu'on defile et gonflerait le plafond (rendu casse au resize/plein ecran).
+  function topBarHeight(){
+    const bar = document.querySelector(".toolbar");
+    const h = bar ? bar.getBoundingClientRect().height : 0;
+    return (isFinite(h) && h > 0) ? h : 48;
+  }
   function listPlotHeight(el, fig){
     const aspect = plotAspect(fig);
     const width = listPlotWidth(el, fig);
-    const toolbar = 90;
-    const maxHeight = Math.max(300, window.innerHeight - toolbar);
+    // Plafond : toute la carte doit tenir a l'ecran -> on voit ensemble les
+    // boutons d'export (haut de la carte) ET l'axe X (bas du graphe). On retire
+    // de la fenetre le bandeau, le chrome de la carte au-dessus du graphe, et une
+    // marge (padding bas de .plotwrap + respiration).
+    const maxHeight = Math.max(300, window.innerHeight - topBarHeight() - cardChromeHeight(el) - 32);
     return Math.min(maxHeight, Math.max(300, Math.round(width * aspect)));
   }
   function applyListPlotSizing(el, fig){
@@ -3114,6 +3744,114 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     });
     if (Object.keys(patch).length){ Plotly.relayout(gd, patch); }
   }
+
+  function guideAxisRange(gd, axisKey){
+    const fl = gd && gd._fullLayout;
+    const axis = (fl && fl[axisKey]) || (gd.layout && gd.layout[axisKey]) || {};
+    if (axis.type === "date") { return null; }
+    const raw = Array.isArray(axis.range) ? axis.range : null;
+    if (!raw || raw.length < 2){ return null; }
+    let a = Number(raw[0]), b = Number(raw[1]);
+    if (!isFinite(a) || !isFinite(b) || a === b){ return null; }
+    if (axis.type === "log") { a = Math.pow(10, a); b = Math.pow(10, b); }
+    return [a, b];
+  }
+
+  function guideFigureId(gd){
+    const m = /^plot-(\d+)$/.exec(gd && gd.id || "");
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  function createGuideShape(gd, kind, coord){
+    const xRange = guideAxisRange(gd, "xaxis");
+    const yRange = guideAxisRange(gd, "yaxis");
+    if (!xRange || !yRange){
+      vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : les lignes H/V utilisent pour l'instant des axes numeriques visibles." });
+      return null;
+    }
+    const isVertical = kind === "v";
+    return {
+      type: "line",
+      xref: "x", yref: "y",
+      x0: isVertical ? coord : xRange[0],
+      x1: isVertical ? coord : xRange[1],
+      y0: isVertical ? yRange[0] : coord,
+      y1: isVertical ? yRange[1] : coord,
+      line: { color: "#d62728", width: 2.5, dash: "dash" },
+      // Non editable : on ne laisse PAS Plotly capturer le drag natif (qui
+      // proposait juste de deplacer la ligne). L'edition passe par notre
+      // intercepteur mousedown -> openGuideShapeEditor (couleur/style/position).
+      editable: false,
+      layer: "above",
+      name: "__spGuideLine:" + (isVertical ? "v" : "h"),
+      _spGuideLine: { kind: isVertical ? "v" : "h", xref: "x", yref: "y" }
+    };
+  }
+
+  function appendGuideShape(gd, shape){
+    const shapes = guideShapesArray(gd);
+    const index = shapes.length;
+    shapes.push(shape);
+    const patch = { shapes: shapes };
+    try { Plotly.relayout(gd, patch); } catch (e) { return -1; }
+    persistLayoutPatch(gd, patch);
+    return index;
+  }
+
+  function guideDefaultCoord(gd, kind){
+    const range = guideAxisRange(gd, kind === "v" ? "xaxis" : "yaxis");
+    if (!range){ return "0"; }
+    const mid = (Number(range[0]) + Number(range[1])) / 2;
+    return isFinite(mid) ? String(Number(mid.toPrecision(6))) : "0";
+  }
+
+  function promptGuideLine(gd, kind){
+    // Les webviews VS Code ne supportent pas window.prompt() (renvoie null) :
+    // on ajoute la ligne a une coordonnee par defaut (milieu de l'axe) puis
+    // on ouvre l'editeur HTML, ou le champ leGuideCoord permet de l'ajuster.
+    const coord = Number(String(guideDefaultCoord(gd, kind)).replace(",", "."));
+    if (!isFinite(coord)){
+      vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : coordonnee invalide pour la ligne." });
+      return;
+    }
+    const shape = createGuideShape(gd, kind, coord);
+    if (!shape){ return; }
+    const idx = appendGuideShape(gd, shape);
+    if (idx < 0){
+      vscodeApi.postMessage({ type: "notify", level: "error", text: "Chaz Plots : impossible d ajouter la ligne." });
+      return;
+    }
+    openGuideShapeEditor(gd, idx);
+    vscodeApi.postMessage({ type: "notify", level: "info", text: "Chaz Plots : ligne ajoutee." });
+  }
+
+  function openGuideLineMenu(gd, anchorRect){
+    closeToolsMenu();
+    const menu = document.createElement("div");
+    menu.className = "modebar-menu";
+    [
+      { label: "Ligne horizontale (hline)", kind: "h" },
+      { label: "Ligne verticale (vline)", kind: "v" }
+    ].forEach(function(item){
+      const b = document.createElement("button");
+      b.className = "modebar-menu-item";
+      b.type = "button";
+      const span = document.createElement("span");
+      span.textContent = item.label;
+      b.appendChild(span);
+      b.addEventListener("click", function(){ closeToolsMenu(); promptGuideLine(gd, item.kind); });
+      menu.appendChild(b);
+    });
+    document.body.appendChild(menu);
+    openToolsMenuEl = menu;
+    openToolsMenuAnchor = null;
+    const r = anchorRect || { bottom: 40, left: 40, top: 36 };
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    let top = r.bottom + 4;
+    if (top + h > window.innerHeight - 8){ top = Math.max(8, (r.top || top) - 4 - h); }
+    menu.style.top = top + "px";
+    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
+  }
   let openToolsMenuEl = null;
   let openToolsMenuAnchor = null;
   function closeToolsMenu(){
@@ -3137,6 +3875,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       { label: "Déplacer", fn: function(){ Plotly.relayout(gd, { dragmode: "pan" }); } },
       { label: "Réinitialiser les axes", fn: function(){ modebarResetAxes(gd); } },
       { label: "Auto-échelle", fn: function(){ modebarAutoRange(gd); } },
+      { label: "Ajouter courbe", keepOpen: true, fn: function(button){ openGuideLineMenu(gd, button.getBoundingClientRect()); } },
       { label: "Mesures", checked: !!gd._spMeasureArmed, fn: function(){ armMeasure(gd); } },
       { label: "Auto-échelle Y", checked: !!gd._spAutoY, fn: function(){
           gd._spAutoY = !gd._spAutoY;
@@ -3159,7 +3898,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         c.textContent = "✓";
         b.appendChild(c);
       }
-      b.addEventListener("click", function(){ it.fn(); closeToolsMenu(); });
+      b.addEventListener("click", function(){ it.fn(b); if (!it.keepOpen){ closeToolsMenu(); } });
       menu.appendChild(b);
     });
     document.body.appendChild(menu);
@@ -3277,13 +4016,14 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       }
     }, {
       name: "legendEdit",
-      title: "Editer la legende : cliquer pour armer, puis cliquer une entree",
+      title: "Editer : cliquer pour armer, puis cliquer une courbe, une ligne H/V, une entree de legende, un titre ou un axe",
       icon: { width: 16, height: 16, path: "M2 14 L2 11 L10 3 L13 6 L5 14 Z M9 4 L12 7" },
       click: function(gd){
         gd._spLegendEditArmed = !gd._spLegendEditArmed;
         if (gd._spLegendEditArmed){
           if (gd._spInsetArmed){ gd._spInsetArmed = false; setInsetArmedFeedback(gd, coordsEl); }
           if (gd._spMeasureArmed){ gd._spMeasureArmed = false; setMeasureArmedFeedback(gd); }
+          if (gd._spAnnotationArmed){ gd._spAnnotationArmed = false; setAnnotationFeedback(gd, coordsEl); }
         }
         setLegendEditFeedback(gd, coordsEl);
       }
@@ -3297,6 +4037,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     if (el._spAutoY === undefined){ el._spAutoY = true; }   // auto-echelle Y activee par defaut
     Plotly.newPlot(el, data, layout, config);
     attachLegendTextEditor(el);
+    attachAxisLabelDrag(el);
+    attachGuideTraceEditor(el);
     attachAnnotationEditor(el);
     attachPlotNav(el);
     attachMeasure(el);
@@ -3324,6 +4066,11 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         openLegendEditor(el, ev.curveNumber);
         return false;
       });
+      el.on("plotly_click", function(ev){
+        if (!el._spLegendEditArmed){ return; }
+        const pt = ev && ev.points && ev.points[0];
+        if (pt && pt.curveNumber !== undefined){ openLegendEditor(el, pt.curveNumber); }
+      });
     }
     if (coordsEl && el.on){
       el.on("plotly_hover", function(ev){
@@ -3339,6 +4086,11 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     for (let i = listPlots.length - 1; i >= 0; i--){
       const p = listPlots[i];
       if (!document.body.contains(p.el)){ listPlots.splice(i, 1); continue; }
+      // Garde-fou largeur 0 : pendant une transition (plein ecran, panneau
+      // re-agence), un resize peut etre mesure a largeur transitoire 0 ; sans
+      // ce test on figerait le graphe au plancher 300px sans rien pour corriger
+      // ensuite (le .plotwrap reste a 100%, donc le ResizeObserver ne refire pas).
+      if (!p.el.clientWidth){ continue; }
       try {
         const size = applyListPlotSizing(p.el, p.fig);
         Plotly.relayout(p.el, { width: size.width, height: size.height }).then(function(){
@@ -3347,14 +4099,25 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       } catch (e) {}
     }
   }
-  let resizeTimer = null;
-  window.addEventListener("resize", function(){
+  // Recalcule taille (largeur ET hauteur) a chaque changement de fenetre, et
+  // un 2e passage retarde pour capter la mise en page stabilisee post-transition.
+  let resizeTimer = null, resizeSettle = null;
+  function scheduleListResize(){
     if (resizeTimer){ clearTimeout(resizeTimer); }
     resizeTimer = setTimeout(function(){
       resizeListPlots();
       if (compareOverlay.classList.contains("show")){ resizeComparePlots(); }
     }, 120);
-  });
+    if (resizeSettle){ clearTimeout(resizeSettle); }
+    resizeSettle = setTimeout(function(){
+      resizeListPlots();
+      if (compareOverlay.classList.contains("show")){ resizeComparePlots(); }
+    }, 420);
+  }
+  window.addEventListener("resize", scheduleListResize);
+  // Le basculement plein ecran ne change parfois que la hauteur (pas la largeur),
+  // ce qui ne declenche pas le ResizeObserver par graphe : on force le recalcul.
+  document.addEventListener("fullscreenchange", scheduleListResize);
 
   // ----------------------------------------------------------
   // Carte
@@ -4239,6 +5002,21 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   document.getElementById("compareBundle").addEventListener("click", function(){
     exportBundle(currentComparePlotEl(), comparePseudoFig());
   });
+  // Uniformise la barre comparaison avec les cartes : les actions secondaires
+  // (Exporter CSV, Bundle publication) passent sous le meme menu "..."
+  // (makeActionMenu + icone que les cartes), ne laissant visibles que
+  // Copier / Enregistrer / Erreur. Les boutons gardent leurs id et listeners.
+  (function buildCompareActionMenu(){
+    const bar = compareOverlay.querySelector(".obar");
+    // Bouton Enregistrer = meme icone (fleche telecharger) que l'export des cartes.
+    const saveBtn = document.getElementById("compareSave");
+    if (saveBtn){ saveBtn.className = "iconbtn"; saveBtn.innerHTML = ICONS.save; }
+    const menu = makeActionMenu([
+      document.getElementById("compareCsv"),
+      document.getElementById("compareBundle")
+    ]);
+    if (bar && menu){ bar.insertBefore(menu, document.getElementById("compareClose")); }
+  })();
   compareSide.addEventListener("click", function(){ openCompare("side"); });
   compareStack.addEventListener("click", function(){ openCompare("stack"); });
   compareOpacity.addEventListener("input", function(){
@@ -4358,8 +5136,117 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       });
   }
 
+  // ----------------------------------------------------------
+  // Export du mode comparaison "cote a cote" : plusieurs panneaux Plotly/images
+  // independants. On capture chaque panneau (Plotly.toImage ou <img>) et on les
+  // juxtapose sur un canvas, titres inclus, pour une seule image composite.
+  // ----------------------------------------------------------
+  function exportCompareSideCanvas(options){
+    const panes = Array.prototype.slice.call(compareBody.querySelectorAll(".compare-pane"));
+    if (!panes.length){ return Promise.reject(new Error("aucun panneau a exporter")); }
+    const scale = Math.max(2, Number(options.scale) || 2);
+    return Promise.all(panes.map(function(pane){
+      const title = (pane.querySelector(".compare-pane-title") || {}).textContent || "";
+      const plot = pane.querySelector(".compare-plot");
+      if (plot && typeof Plotly !== "undefined" && Plotly.toImage){
+        const w = Math.max(1, Math.round(plot.clientWidth || 600));
+        const h = Math.max(1, Math.round(plot.clientHeight || 400));
+        return Plotly.toImage(plot, { format: "png", width: w, height: h, scale: scale })
+          .then(function(url){ return { url: url, title: title }; });
+      }
+      const img = pane.querySelector("img");
+      if (img && img.src){ return Promise.resolve({ url: img.src, title: title }); }
+      return Promise.resolve(null);
+    })).then(function(infos){
+      const items = infos.filter(Boolean);
+      if (!items.length){ throw new Error("aucune image de panneau a exporter"); }
+      return Promise.all(items.map(function(it){
+        return new Promise(function(res, rej){
+          const im = new Image();
+          im.onload = function(){ res({ img: im, title: it.title }); };
+          im.onerror = function(){ rej(new Error("image de panneau illisible")); };
+          im.src = it.url;
+        });
+      }));
+    }).then(function(loaded){
+      const gap = 18, titleH = 30;
+      const H = Math.max.apply(null, loaded.map(function(l){ return l.img.naturalHeight || l.img.height || 1; }));
+      const widths = loaded.map(function(l){
+        const nh = l.img.naturalHeight || l.img.height || H;
+        const nw = l.img.naturalWidth || l.img.width || H;
+        return Math.max(1, Math.round(nw * (H / nh)));
+      });
+      const totalW = widths.reduce(function(a, b){ return a + b; }, 0) + gap * (loaded.length + 1);
+      const totalH = H + titleH + gap * 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = totalW; canvas.height = totalH;
+      const ctx = canvas.getContext("2d");
+      if (!options.transparent){ ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, totalW, totalH); }
+      ctx.fillStyle = "#111111"; ctx.textBaseline = "top";
+      ctx.font = "600 " + Math.round(titleH * 0.6) + "px sans-serif";
+      let x = gap;
+      loaded.forEach(function(l, i){
+        if (l.title){
+          ctx.save(); ctx.beginPath(); ctx.rect(x, gap, widths[i], titleH); ctx.clip();
+          ctx.fillText(l.title, x, gap); ctx.restore();
+        }
+        ctx.drawImage(l.img, x, gap + titleH, widths[i], H);
+        x += widths[i] + gap;
+      });
+      return canvas;
+    });
+  }
+  // Canvas raster -> PDF (page A taille du canvas @96dpi). Reutilise les helpers
+  // de buildRasterPdfDataUrl (deflate Flate, ou JPEG si pas de CompressionStream).
+  function canvasToRasterPdfDataUrl(canvas){
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    const pageW = Number((w * 0.75).toFixed(2)), pageH = Number((h * 0.75).toFixed(2));
+    if (typeof CompressionStream !== "undefined"){
+      const rgb = rgbaToRgbOnWhite(ctx.getImageData(0, 0, w, h).data);
+      return deflateZlib(rgb).then(function(def){
+        return bytesToPdfDataUrl(PdfExport.buildPdf({
+          imageBytes: def, pixelWidth: w, pixelHeight: h,
+          pageWidth: pageW, pageHeight: pageH, filter: "FlateDecode", colorComponents: 3
+        }));
+      });
+    }
+    const jpeg = canvas.toDataURL("image/jpeg", 0.92);
+    return Promise.resolve(bytesToPdfDataUrl(PdfExport.buildPdf({
+      imageBytes: bytesFromBase64DataUrl(jpeg), pixelWidth: w, pixelHeight: h,
+      pageWidth: pageW, pageHeight: pageH, filter: "DCTDecode", colorComponents: 3
+    })));
+  }
+  function exportCompareSide(msg){
+    const options = msg.options || {};
+    exportCompareSideCanvas(options).then(function(canvas){
+      if (options.format === "pdf"){
+        return canvasToRasterPdfDataUrl(canvas).then(function(url){ postExportResult(msg.requestId, true, url, null); });
+      }
+      const png = canvas.toDataURL("image/png");
+      if (options.format === "svg"){
+        // Pas de composite vectoriel : on emballe le PNG dans un SVG valide
+        // (fichier .svg correct) plutot que d'ecrire du PNG sous extension .svg.
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + canvas.width +
+          '" height="' + canvas.height + '" viewBox="0 0 ' + canvas.width + ' ' + canvas.height +
+          '"><image width="' + canvas.width + '" height="' + canvas.height + '" href="' + png + '"/></svg>';
+        const url = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
+        postExportResult(msg.requestId, true, url, null);
+        return null;
+      }
+      postExportResult(msg.requestId, true, png, null);
+      return null;
+    }).catch(function(err){ postExportResult(msg.requestId, false, null, String(err)); });
+  }
+
   function exportPlotly(msg){
     const isCompare = msg.id === "compare";
+    // Mode comparaison cote a cote : plusieurs panneaux independants -> on
+    // exporte une image composite de tous les panneaux (cf. exportCompareSide).
+    if (isCompare && compareBody.querySelector(".compare-grid")){
+      exportCompareSide(msg);
+      return;
+    }
     const el = isCompare ? currentComparePlotEl() : document.getElementById("plot-" + msg.id);
     const fig = isCompare ? null : figStore[msg.id];
     if (!el || typeof Plotly === "undefined" || !Plotly.toImage){

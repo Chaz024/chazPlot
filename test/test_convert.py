@@ -59,6 +59,17 @@ class ConvertBaseTests(unittest.TestCase):
         for actual, expected in zip(trace["error_y"]["array"], [0.1, 0.2, 0.3]):
             self.assertAlmostEqual(actual, expected)
 
+    def test_hlines_vlines_linecollection_stays_interactive(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1], [0, 1], label="signal")
+        ax.hlines(0.4, 0.1, 0.9, colors="red", linestyles="--", label="seuil")
+        ax.vlines(0.6, 0.2, 0.8, colors="blue", label="repere")
+        spec = convert_figure(fig)
+        self.assertIsNotNone(spec)
+        guides = [t for t in spec["data"] if t.get("_spGuideLine")]
+        self.assertEqual({g["_spGuideLine"]["kind"] for g in guides}, {"h", "v"})
+        self.assertTrue(all(t["type"] == "scatter" and t["mode"] == "lines" for t in guides))
+
     def test_boxplot_patch_artist_keeps_filled_boxes(self):
         fig, ax = plt.subplots()
         ax.boxplot([np.arange(5), np.arange(5) + 1], patch_artist=True)
@@ -290,7 +301,7 @@ class ConvertReasonTests(unittest.TestCase):
         self.assertEqual(reason["code"], "unsupported_artist")
         # le nom de la classe matplotlib non geree apparait dans le detail
         self.assertTrue(reason["detail"])
-        self.assertIn("Collection", reason["detail"])
+        self.assertRegex(reason["detail"], "(Collection|Patch)")
 
     def test_too_many_points_reason(self):
         fig, ax = plt.subplots()

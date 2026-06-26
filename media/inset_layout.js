@@ -215,13 +215,15 @@
 
   // ---- traits de liaison (loupe) entre zone source et encart ----
   // sourceRect / insetRect : rectangles paper {x0,y0,x1,y1}. Renvoie des segments
-  // { corner, x0,y0,x1,y1 } reliant des coins homonymes. opts.corners : 2 (defaut,
-  // les 2 coins "exterieurs" qui ne traversent rien) ou 4 (tous les coins ; un
-  // segment qui traverse l'encart est coupe a son bord par clipSegmentBeforeRect).
-  // En mode 2, choix par signe relatif des centres : nw/se, sinon ne/sw.
+  // { corner, x0,y0,x1,y1 } reliant des coins homonymes. opts.corners : 0 (aucun
+  // trait), 2 (defaut, les 2 coins "exterieurs" qui ne traversent rien) ou 4 (tous
+  // les coins ; un segment qui traverse l'encart est coupe a son bord par
+  // clipSegmentBeforeRect). En mode 2, choix par signe relatif des centres :
+  // nw/se, sinon ne/sw.
   function insetConnectorLines(sourceRect, insetRect, opts) {
     if (!sourceRect || !insetRect) { return []; }
     opts = opts || {};
+    if (opts.corners === 0) { return []; }
     const sCx = (sourceRect.x0 + sourceRect.x1) / 2;
     const sCy = (sourceRect.y0 + sourceRect.y1) / 2;
     const iCx = (insetRect.x0 + insetRect.x1) / 2;

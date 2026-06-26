@@ -217,6 +217,10 @@ check("insetConnectorLines: chaque segment porte son coin (corner)", function ()
   const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6));
   lines.forEach(function(l){ assert.ok(["nw", "ne", "sw", "se"].indexOf(l.corner) >= 0, "corner manquant"); });
 });
+check("insetConnectorLines: mode 0 coin ne renvoie aucun segment", function () {
+  const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6), { corners: 0 });
+  assert.strictEqual(lines.length, 0, "0 coin doit ne renvoyer aucun segment");
+});
 check("insetConnectorLines: mode 4 coins renvoie les 4 coins", function () {
   const lines = IL.insetConnectorLines(rectIn(0, 0, 2, 2), rectIn(4, 4, 6, 6), { corners: 4 });
   assert.strictEqual(lines.length, 4, "doit renvoyer 4 segments");

@@ -27,7 +27,7 @@ import re
 import numpy as np
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
-from matplotlib.collections import PathCollection, QuadMesh, PolyCollection
+from matplotlib.collections import PathCollection, QuadMesh, PolyCollection, LineCollection
 from matplotlib.contour import QuadContourSet
 from matplotlib.image import AxesImage
 from matplotlib.container import BarContainer, ErrorbarContainer
@@ -562,6 +562,69 @@ def _convert_line(line, axis_suffix):
         trace["showlegend"] = False
     return trace, x.size
 
+
+def _line_collection_dash(collection):
+    """Approxime le style de tirets d'une LineCollection matplotlib."""
+    try:
+        styles = collection.get_linestyles()
+    except Exception:
+        styles = None
+    if styles:
+        try:
+            seq = styles[0][1]
+            if seq:
+                return "dash"
+        except Exception:
+            pass
+    return "solid"
+
+
+def _single_guide_kind(segments):
+    if len(segments) != 1:
+        return None
+    segment = np.asarray(segments[0], dtype=float)
+    if segment.ndim != 2 or segment.shape[0] < 2 or segment.shape[1] < 2:
+        return None
+    x0, y0 = segment[0, 0], segment[0, 1]
+    x1, y1 = segment[-1, 0], segment[-1, 1]
+    if np.isfinite([x0, y0, x1, y1]).all():
+        if abs(y1 - y0) <= 1e-12:
+            return "h"
+        if abs(x1 - x0) <= 1e-12:
+            return "v"
+    return None
+
+
+def _convert_line_collection(collection, axis_suffix):
+    """LineCollection simple (plt.hlines/vlines, eventplot basique) -> trace lines."""
+    try:
+        segments = list(collection.get_segments())
+    except Exception:
+        return None, 0
+    x, y, total = _segments_to_xy(segments)
+    if total == 0:
+        return None, 0
+    color = _color_at(collection.get_colors(), 0, default="#7f7f7f")
+    width = _number_at(collection.get_linewidths(), 0, default=1.5)
+    trace = {
+        "type": "scatter",
+        "mode": "lines",
+        "x": x,
+        "y": y,
+        "xaxis": "x" + axis_suffix,
+        "yaxis": "y" + axis_suffix,
+        "line": {"color": color, "width": width, "dash": _line_collection_dash(collection)},
+    }
+    label = collection.get_label() if hasattr(collection, "get_label") else None
+    if _label_ok(label):
+        trace["name"] = label
+        trace["showlegend"] = True
+    else:
+        trace["showlegend"] = False
+    kind = _single_guide_kind(segments)
+    if kind:
+        trace["_spGuideLine"] = {"kind": kind, "xref": "x" + axis_suffix, "yref": "y" + axis_suffix}
+    return trace, total
 
 
 # --- errorbar -> scatter + barres d'erreur Plotly ---------------------------
@@ -1777,7 +1840,7 @@ def convert_figure_with_reason(fig):
                 errorbar_lines.update(caplines)
                 errorbar_collections.update(barlinecols)
         for child in ax.get_children():
-            if not is_polar and isinstance(child, (QuadContourSet, Quiver)):
+            if not is_polar and isinstance(child, (QuadContourSet, Quiver, LineCollection)):
                 supported_collections.add(child)
         for patch in ax.patches:
             if isinstance(patch, PathPatch) and patch is not ax.patch and _is_simple_path_patch(patch):
@@ -1818,6 +1881,9 @@ def convert_figure_with_reason(fig):
                 traces, n = _convert_contour_set(child, suffix)
             elif isinstance(child, Quiver):
                 traces, n = _convert_quiver(child, suffix, ax)
+            elif isinstance(child, LineCollection):
+                trace, n = _convert_line_collection(child, suffix)
+                traces = [trace] if trace is not None else None
             elif isinstance(child, PathCollection):
                 trace, n = _convert_scatter(child, suffix)
                 traces = [trace] if trace is not None else None
