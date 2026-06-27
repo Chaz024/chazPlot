@@ -32,8 +32,11 @@ const vscode = require("vscode");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
+const zlib = require("zlib");
 const storage = require("./storage");
 const LegendEdit = require("./media/legend_edit.js");
+const FigureCodec = require("./media/figure_codec.js");
+const PlotlyToPy = require("./media/plotly_to_py.js");
 
 // --- Etat global du module ---
 let panel = null;          // l'unique WebviewPanel (null si ferme)
@@ -325,6 +328,81 @@ function updateFigureLayout(id, patch) {
   try { storage.save(fig); } catch (e) { /* best-effort */ }
 }
 
+// Remplace en bloc la spec Plotly d'une figure (data + layout). Utilise par
+// l'annulation (Ctrl+Z) du webview : restaurer un etat anterieur d'un coup
+// plutot qu'en patches incrementaux.
+function replaceFigurePlotly(id, plotly) {
+  const fig = figures.find(function (f) { return f.id === id; });
+  if (!fig || !fig.plotly || !plotly || typeof plotly !== "object") { return; }
+  if (Array.isArray(plotly.data)) { fig.plotly.data = plotly.data; }
+  if (plotly.layout && typeof plotly.layout === "object") { fig.plotly.layout = plotly.layout; }
+  // Registre des vignettes (encarts colles d'un autre graphe) : persiste pour
+  // remonter les overlays draggables au rechargement.
+  if (Array.isArray(plotly.vignettes)) { fig.plotly.vignettes = plotly.vignettes; }
+  fig.edited = true;
+  try { storage.save(fig); } catch (e) { /* best-effort */ }
+}
+
+// Ctrl/Cmd+clic sur la provenance d'une figure : ouvre le script Python a la
+// ligne du site d'appel (provenance.source/line).
+function openSource(filePath, line) {
+  if (!filePath || typeof filePath !== "string") { return; }
+  const uri = vscode.Uri.file(filePath);
+  vscode.workspace.openTextDocument(uri).then(function (doc) {
+    const opts = { preview: false };
+    const ln = Number(line);
+    if (isFinite(ln) && ln > 0) {
+      const pos = new vscode.Position(ln - 1, 0);
+      opts.selection = new vscode.Range(pos, pos);
+    }
+    return vscode.window.showTextDocument(doc, opts);
+  }, function (err) {
+    vscode.window.showWarningMessage(
+      "Chaz Plots : impossible d'ouvrir " + filePath + " (" + String((err && err.message) || err) + ")."
+    );
+  });
+}
+
+// Enregistre un preset de style personnalise (cree depuis l'editeur Style
+// publication) dans la config `chazPlots.customPlotStyles` (settings utilisateur)
+// pour qu'il reapparaisse au prochain demarrage.
+function saveCustomPreset(name, style) {
+  if (!name || typeof name !== "string" || !style || typeof style !== "object") { return; }
+  const cfg = vscode.workspace.getConfiguration("chazPlots");
+  const current = cfg.get("customPlotStyles", {});
+  const next = Object.assign({}, (current && typeof current === "object") ? current : {});
+  next[name] = style;
+  cfg.update("customPlotStyles", next, vscode.ConfigurationTarget.Global).then(function () {
+    vscode.window.showInformationMessage("Chaz Plots : preset « " + name + " » enregistré.");
+  }, function (err) {
+    vscode.window.showErrorMessage(
+      "Chaz Plots : échec d'enregistrement du preset (" + String((err && err.message) || err) + ")."
+    );
+  });
+}
+
+// Glisser un fichier de donnees depuis l'explorateur VS Code : le webview ne lit
+// pas le disque, il envoie l'URI ; on lit le contenu et on le renvoie.
+function readDataFile(requestId, uriString, target) {
+  if (!requestId || !uriString) { return; }
+  let fsPath;
+  try { fsPath = vscode.Uri.parse(uriString).fsPath; }
+  catch (e) { fsPath = String(uriString); }
+  fs.readFile(fsPath, "utf8", function (err, text) {
+    if (err) {
+      postToWebview({ type: "dataFileContent", requestId: requestId, error: String((err && err.message) || err) });
+      return;
+    }
+    postToWebview({ type: "dataFileContent", requestId: requestId, text: text, name: path.basename(fsPath), target: target });
+  });
+}
+
+// Cree une figure a partir de donnees importees (glisser sur une zone vide).
+function createFigureFromData(title, plotly) {
+  if (!plotly || typeof plotly !== "object") { return; }
+  addFigure({ plotly: plotly, title: title ? String(title) : "Données importées" });
+}
+
 // Override du toggle "export science" (depuis le webview) : choisit si l'export
 // d'une figure plotly puise dans les assets matplotlib propres ou dans le rendu
 // Plotly. Persiste le choix (storage serialise l'objet entier).
@@ -409,6 +487,95 @@ function writeDataUrl(filePath, dataUrl) {
     ? Buffer.from(payload, "base64")
     : Buffer.from(decodeURIComponent(payload), "utf8");
   fs.writeFileSync(filePath, buffer);
+}
+
+// ------------------------------------------------------------
+// Figure "auto-portee" : on cache la spec Plotly (les points de la courbe) dans
+// le PNG/SVG enregistre pour pouvoir recreer la figure en deposant l'image. Les
+// donnees sont DEJA visibles dans l'image -> pas de fuite (contrairement au code
+// source) ; cf. memoire "paused-self-documenting-images" pour la distinction.
+// ------------------------------------------------------------
+const EMBED_KEYWORD = "chazPlotsFigure";
+let embedSizeWarned = false;
+
+// Injecte les donnees de `fig` dans le fichier PNG/SVG deja ecrit (best-effort :
+// n'echoue jamais la sauvegarde). Respecte le reglage + un plafond de taille.
+function embedFigureInFile(filePath, fig) {
+  try {
+    const cfg = vscode.workspace.getConfiguration("chazPlots");
+    if (!cfg.get("embedFigureData", true)) { return; }
+    // Pas de plotly exploitable (animation, image brute, vue "compare" synthetique).
+    if (!fig || fig.plotly === true || !fig.plotly || typeof fig.plotly !== "object" || fig.frames) { return; }
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext !== ".png" && ext !== ".svg") { return; }
+    const json = JSON.stringify({ tool: "chaz-plots", v: 1, kind: "figure", title: fig.title || "", plotly: fig.plotly });
+    const deflated = zlib.deflateSync(Buffer.from(json, "utf8"));
+    const capKB = Number(cfg.get("embedFigureDataMaxKB", 2048)) || 2048;
+    if (deflated.length > capKB * 1024) {
+      if (!embedSizeWarned) {
+        embedSizeWarned = true;
+        vscode.window.showWarningMessage(
+          "Chaz Plots : donnees trop volumineuses pour etre integrees a l'image (> " + capKB +
+          " Ko compresses) ; figure enregistree sans donnees embarquees (reglage chazPlots.embedFigureDataMaxKB)."
+        );
+      }
+      return;
+    }
+    if (ext === ".png") {
+      const out = FigureCodec.pngEmbed(fs.readFileSync(filePath), EMBED_KEYWORD, deflated);
+      if (out) { fs.writeFileSync(filePath, Buffer.from(out)); }
+    } else {
+      const out = FigureCodec.svgEmbed(fs.readFileSync(filePath, "utf8"), deflated.toString("base64"));
+      fs.writeFileSync(filePath, out);
+    }
+  } catch (e) { /* best-effort : ne jamais bloquer la sauvegarde */ }
+}
+
+// Lit les donnees embarquees d'une image (octets) -> objet payload ou null.
+function extractEmbeddedFigure(buf, name) {
+  try {
+    const ext = path.extname(name || "").toLowerCase();
+    let deflated = null;
+    if (ext === ".svg" || !FigureCodec.isPng(buf)) {
+      const b64 = FigureCodec.svgExtract(buf.toString("utf8"));
+      if (b64) { deflated = Buffer.from(b64, "base64"); }
+    } else {
+      const raw = FigureCodec.pngExtract(buf, EMBED_KEYWORD);
+      if (raw) { deflated = Buffer.from(raw); }
+    }
+    if (!deflated) { return null; }
+    const obj = JSON.parse(zlib.inflateSync(deflated).toString("utf8"));
+    if (obj && obj.tool === "chaz-plots" && obj.plotly && typeof obj.plotly === "object") { return obj; }
+  } catch (e) { /* image sans donnees Chaz Plots valides */ }
+  return null;
+}
+
+// Image deposee : si elle porte des donnees Chaz Plots, genere un script
+// matplotlib qui reproduit la courbe (a partir des donnees embarquees, jamais du
+// code source) et l'ouvre dans un nouvel editeur Python. Sinon, message discret.
+function generateCodeFromImage(buf, name) {
+  const payload = extractEmbeddedFigure(buf, name);
+  if (!payload) {
+    vscode.window.showInformationMessage(
+      "Chaz Plots : « " + (name || "cette image") + " » ne contient pas de donnees Chaz Plots."
+    );
+    return;
+  }
+  let code;
+  try {
+    code = PlotlyToPy.toMatplotlib({ title: payload.title || "", plotly: payload.plotly });
+  } catch (e) {
+    vscode.window.showErrorMessage("Chaz Plots : echec de la generation du code (" + String(e) + ")");
+    return;
+  }
+  const header = "# Code reconstruit par Chaz Plots a partir de l'image"
+    + (payload.title ? " « " + payload.title + " »" : "")
+    + "\n# (donnees embarquees dans l'image ; reproduit la courbe).\n\n";
+  vscode.workspace.openTextDocument({ language: "python", content: header + code })
+    .then(function (doc) { return vscode.window.showTextDocument(doc); })
+    .then(undefined, function (err) {
+      vscode.window.showErrorMessage("Chaz Plots : impossible d'ouvrir l'editeur (" + String(err) + ")");
+    });
 }
 
 async function plotlyExportOptions(fig) {
@@ -499,7 +666,8 @@ async function saveOne(id, frameIndex) {
     pendingExports[requestId] = {
       filePath: uri.fsPath,
       title: fig.title,
-      nativePdf: allowNative ? fig.pdf : null
+      nativePdf: allowNative ? fig.pdf : null,
+      figId: fig.id
     };
     options.allowNative = allowNative;
     postToWebview({ type: "exportPlotly", id: fig.id, requestId: requestId, options: options });
@@ -517,6 +685,7 @@ async function saveOne(id, frameIndex) {
     if (!uri) { return; }
     try {
       writeFigure(fig, uri.fsPath, frameIndex);
+      embedFigureInFile(uri.fsPath, fig);
       vscode.window.showInformationMessage("Figure enregistree : " + uri.fsPath);
     } catch (err) {
       vscode.window.showErrorMessage("Chaz Plots : echec de l'enregistrement (" + String(err) + ")");
@@ -545,8 +714,14 @@ function finishPlotlyExport(msg) {
       fs.writeFileSync(request.filePath, Buffer.from(request.nativePdf, "base64"));
     } else {
       writeDataUrl(request.filePath, msg.dataUrl);
+      // Figure auto-portee : injecte les donnees dans le PNG/SVG rendu par le webview.
+      if (request.figId !== undefined && !request.report) {
+        const f = figures.find(function (x) { return x.id === request.figId; });
+        if (f) { embedFigureInFile(request.filePath, f); }
+      }
     }
     if (batch) { batch.written = batch.written + 1; }
+    else if (request.report) { vscode.window.showInformationMessage("Rapport PDF enregistré : " + request.filePath); }
     else { vscode.window.showInformationMessage("Figure exportee : " + request.filePath); }
   } catch (err) {
     if (!batch) {
@@ -662,32 +837,82 @@ function savePgf(id) {
   });
 }
 
-function saveAll() {
-  if (figures.length === 0) {
+// ids : sous-ensemble selectionne cote webview (cases de comparaison). Vide/absent
+// = toutes les figures. PNG/SVG (dossier) ET PDF (rapport) respectent la selection.
+function saveAll(ids) {
+  const selected = Array.isArray(ids) && ids.length
+    ? figures.filter(function (f) { return ids.indexOf(f.id) !== -1; })
+    : figures;
+  if (selected.length === 0) {
     vscode.window.showInformationMessage("Chaz Plots : aucune figure à enregistrer.");
     return;
   }
+  const scope = (selected.length === figures.length) ? "toutes les figures" : (selected.length + " figure(s) selectionnee(s)");
+  // Choix du format : PDF -> un seul rapport multipage (une figure par page) ;
+  // PNG/SVG -> un fichier par figure dans un dossier (comportement historique).
+  const choices = [
+    { label: "PDF — un seul rapport multipage", description: "Une figure par page (titre + provenance)", ext: "pdf" },
+    { label: "PNG — un fichier par figure", description: "Dans un dossier", ext: "png" },
+    { label: "SVG — un fichier par figure", description: "Dans un dossier", ext: "svg" }
+  ];
+  vscode.window.showQuickPick(choices, { placeHolder: "Format d'export (" + scope + ")" }).then(function (pick) {
+    if (!pick) { return; }
+    // Le PDF est compose cote webview qui relit lui-meme la selection ; png/svg
+    // (boucle d'ecriture cote extension) recoit explicitement le sous-ensemble.
+    if (pick.ext === "pdf") { exportReportPdf(); }
+    else { saveAllToFolder(pick.ext, selected); }
+  });
+}
+
+// Rapport PDF multipage : choisit un fichier de destination puis demande au
+// webview de composer le PDF (il detient les figures Plotly vivantes + provenance).
+// La selection (cases de comparaison) sinon toutes les figures est decidee cote
+// webview ; ici on ne fait que router le resultat vers finishPlotlyExport.
+function exportReportPdf() {
+  vscode.window.showQuickPick([
+    { label: "Avec provenance", description: "Source, script, git et date en bas de chaque page", value: true },
+    { label: "Sans provenance", description: "Titre et figure seulement", value: false }
+  ], { placeHolder: "Inclure la provenance dans le rapport ?" }).then(function (provPick) {
+    if (!provPick) { return; }
+    vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(workspaceDir(), "rapport.pdf")),
+      filters: { "PDF": ["pdf"] }
+    }).then(function (uri) {
+      if (!uri) { return; }
+      const cfg = vscode.workspace.getConfiguration("chazPlots");
+      const requestId = String(nextExportRequestId++);
+      pendingExports[requestId] = { filePath: uri.fsPath, title: "rapport", nativePdf: null, report: true };
+      postToWebview({
+        type: "exportReport", requestId: requestId,
+        options: { dpi: Number(cfg.get("dpi", 200)) || 150, provenance: provPick.value }
+      });
+    });
+  });
+}
+
+function saveAllToFolder(ext, figs) {
+  const targets = Array.isArray(figs) && figs.length ? figs : figures;
   vscode.window.showOpenDialog({
     canSelectFiles: false,
     canSelectFolders: true,
     canSelectMany: false,
-    openLabel: "Enregistrer les " + String(figures.length) + " figures ici"
+    openLabel: "Enregistrer les " + String(targets.length) + " figures ici"
   }).then(function (uris) {
     if (!uris || uris.length === 0) { return; }
     const dir = uris[0].fsPath;
     const cfg = vscode.workspace.getConfiguration("chazPlots");
-    // Le lot ne gere que png/svg (pdf retombe sur png) : pas de prompt par figure.
-    const ext = cfg.get("saveFormat", "png") === "svg" ? "svg" : "png";
+    // ext (png/svg) choisi en amont par le prompt de saveAll.
     const scale = Math.max(0.25, Number(cfg.get("dpi", 200)) / 96);
     let syncCount = 0;
     const pending = [];   // figures Plotly : pas d'asset png/svg -> export via webview
-    for (let i = 0; i < figures.length; i = i + 1) {
-      const fig = figures[i];
+    for (let i = 0; i < targets.length; i = i + 1) {
+      const fig = targets[i];
       const name = String(i + 1).padStart(2, "0") + "_" + defaultName(fig, ext);
       const filePath = path.join(dir, name);
       let wrote = false;
       try { wrote = writeFigure(fig, filePath); } catch (e) { wrote = false; }
       if (wrote) {
+        embedFigureInFile(filePath, fig);
         syncCount = syncCount + 1;
       } else if (fig.plotly && !fig.frames) {
         pending.push({ fig: fig, filePath: filePath });
@@ -704,7 +929,7 @@ function saveAll() {
     const options = { format: ext, scale: scale, transparent: false };
     pending.forEach(function (item) {
       const requestId = String(nextExportRequestId++);
-      pendingExports[requestId] = { filePath: item.filePath, title: item.fig.title, nativePdf: null, batch: batch };
+      pendingExports[requestId] = { filePath: item.filePath, title: item.fig.title, nativePdf: null, batch: batch, figId: item.fig.id };
       postToWebview({ type: "exportPlotly", id: item.fig.id, requestId: requestId, options: options });
     });
   });
@@ -753,8 +978,37 @@ function setupPanel(p) {
     else if (msg.type === "updateFigure") { updateFigureTrace(msg.id, msg.traceIndex, msg.patch); }
     else if (msg.type === "appendFigureTrace") { appendFigureTrace(msg.id, msg.trace); }
     else if (msg.type === "updateFigureLayout") { updateFigureLayout(msg.id, msg.patch); }
+    else if (msg.type === "replaceFigurePlotly") { replaceFigurePlotly(msg.id, msg.plotly); }
+    else if (msg.type === "openSource") { openSource(msg.path, msg.line); }
+    else if (msg.type === "saveCustomPreset") { saveCustomPreset(msg.name, msg.style); }
+    else if (msg.type === "readDataFile") { readDataFile(msg.requestId, msg.uri, msg.target); }
+    else if (msg.type === "importImageData") {
+      try { generateCodeFromImage(Buffer.from(msg.b64 || "", "base64"), msg.name); }
+      catch (e) { /* image illisible */ }
+    }
+    else if (msg.type === "importImageUri") {
+      try {
+        const fsPath = vscode.Uri.parse(msg.uri).fsPath;
+        generateCodeFromImage(fs.readFileSync(fsPath), path.basename(fsPath));
+      } catch (e) { /* lecture impossible */ }
+    }
+    else if (msg.type === "createFigureFromData") { createFigureFromData(msg.title, msg.plotly); }
+    else if (msg.type === "generateCodeFromSpec") {
+      try {
+        const code = PlotlyToPy.toMatplotlib({ title: msg.title || "", plotly: msg.spec });
+        const header = "# Code reconstruit par Chaz Plots a partir d'une image digitalisee\n"
+          + "# (points extraits du raster ; reproduit la courbe).\n\n";
+        vscode.workspace.openTextDocument({ language: "python", content: header + code })
+          .then(function (doc) { return vscode.window.showTextDocument(doc); })
+          .then(undefined, function (err) {
+            vscode.window.showErrorMessage("Chaz Plots : impossible d'ouvrir l'editeur (" + String(err) + ")");
+          });
+      } catch (e) {
+        vscode.window.showErrorMessage("Chaz Plots : echec de la generation du code (" + String(e) + ")");
+      }
+    }
     else if (msg.type === "editTags") { editTags(msg.id); }
-    else if (msg.type === "saveAll") { saveAll(); }
+    else if (msg.type === "saveAll") { saveAll(msg.ids); }
     else if (msg.type === "delete") { deleteOne(msg.id); }
     else if (msg.type === "deleteAll") { deleteAll(); }
     else if (msg.type === "copied") {
@@ -779,23 +1033,43 @@ function setupPanel(p) {
 function ensurePanel(reveal) {
   if (panel) {
     if (reveal) {
-      // 'undefined' permet au panneau de rester détaché sur un autre écran
+      // 'undefined' permet au panneau de rester détaché sur un autre écran.
+      // Panneau singleton : un script (re)lancé reutilise CETTE fenetre, qu'elle
+      // soit en onglet ou detachee — on n'en ouvre jamais une seconde.
       panel.reveal(undefined, true);
     }
     return;
   }
+  const cfg = vscode.workspace.getConfiguration("chazPlots");
+  const autoDetach = cfg.get("autoDetachWindow", false);
   panel = vscode.window.createWebviewPanel(
     "chazPlots",
     "Graphes",
-    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+    // Detachement auto : on le cree focalise (preserveFocus:false) pour pouvoir
+    // le deplacer dans sa propre fenetre juste apres.
+    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: !autoDetach },
     {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.file(path.join(extContext.extensionPath, "media"))]
     }
   );
-  
+
   setupPanel(panel);
+
+  if (autoDetach) {
+    // Detache le panneau dans sa propre fenetre, UNIQUEMENT a la creation
+    // (le bloc `if (panel)` ci-dessus court-circuite les appels suivants, donc
+    // pas de re-detachement ni de seconde fenetre quand le script relance).
+    // Petit delai : laisser l'editeur webview devenir l'editeur actif avant que
+    // la commande ne le deplace.
+    setTimeout(function () {
+      if (!panel) { return; }
+      try { panel.reveal(undefined, false); } catch (e) { /* ignore */ }
+      vscode.commands.executeCommand("workbench.action.moveEditorToNewWindow")
+        .then(undefined, function () { /* commande indisponible (VS Code ancien) : on laisse l'onglet */ });
+    }, 60);
+  }
 }
 
 function postToWebview(message) {
@@ -850,6 +1124,15 @@ function webviewHtml(webview) {
   const autoscaleUri = webview.asWebviewUri(
     vscode.Uri.file(path.join(extContext.extensionPath, "media", "autoscale.js"))
   );
+  const dataImportUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(extContext.extensionPath, "media", "data_import.js"))
+  );
+  const boardLayoutUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(extContext.extensionPath, "media", "board_layout.js"))
+  );
+  const curveDigitizeUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(extContext.extensionPath, "media", "curve_digitize.js"))
+  );
   const htmlPath = path.join(extContext.extensionPath, "media", "panel.html");
   let template = null;
   try {
@@ -876,7 +1159,10 @@ function webviewHtml(webview) {
       .replace(/{{figureFilterUri}}/g, String(figureFilterUri))
       .replace(/{{pdfExportUri}}/g, String(pdfExportUri))
       .replace(/{{legendEditUri}}/g, String(legendEditUri))
-      .replace(/{{autoscaleUri}}/g, String(autoscaleUri));
+      .replace(/{{autoscaleUri}}/g, String(autoscaleUri))
+      .replace(/{{dataImportUri}}/g, String(dataImportUri))
+      .replace(/{{boardLayoutUri}}/g, String(boardLayoutUri))
+      .replace(/{{curveDigitizeUri}}/g, String(curveDigitizeUri));
   }
   // media/panel.html introuvable : l'extension est mal installee.
   return [
