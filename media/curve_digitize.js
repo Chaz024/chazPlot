@@ -35,8 +35,34 @@
     return { r: (p[0] << 3) | 7, g: (p[1] << 3) | 7, b: (p[2] << 3) | 7 };
   }
 
+  function lum(r, g, b) { return 0.299 * r + 0.587 * g + 0.114 * b; }
+  function sat(r, g, b) {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    return mx === 0 ? 0 : (mx - mn) / mx;
+  }
+  function isAxisPixel(r, g, b) { return lum(r, g, b) < 110 && sat(r, g, b) < 0.35; }
+
+  function detectPlotBox(img, opts) {
+    opts = opts || {};
+    const W = img.width, H = img.height;
+    const colCount = new Array(W).fill(0), rowCount = new Array(H).fill(0);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        if (isAxisPixel(img.data[i], img.data[i + 1], img.data[i + 2])) { colCount[x]++; rowCount[y]++; }
+      }
+    }
+    const vThresh = (opts.vFrac || 0.5) * H, hThresh = (opts.hFrac || 0.5) * W;
+    const cols = [], rows = [];
+    for (let x = 0; x < W; x++) if (colCount[x] >= vThresh) cols.push(x);
+    for (let y = 0; y < H; y++) if (rowCount[y] >= hThresh) rows.push(y);
+    if (!cols.length || !rows.length) return null;
+    return { x0: cols[0], y0: rows[0], x1: cols[cols.length - 1], y1: rows[rows.length - 1] };
+  }
+
   return {
     pixelsToData: pixelsToData,
-    detectBackground: detectBackground
+    detectBackground: detectBackground,
+    detectPlotBox: detectPlotBox
   };
 });

@@ -62,6 +62,16 @@ check("detectBackground : fond blanc malgre quelques pixels colores", function (
   assert.ok(bg.r >= 240 && bg.g >= 240 && bg.b >= 240, "fond proche du blanc");
 });
 
+check("detectPlotBox : cadre noir detecte", function () {
+  const img = makeImage(120, 100);
+  drawVLine(img, 10, 10, 90, [0, 0, 0]);
+  drawVLine(img, 110, 10, 90, [0, 0, 0]);
+  drawHLine(img, 10, 10, 110, [0, 0, 0]);
+  drawHLine(img, 90, 10, 110, [0, 0, 0]);
+  const box = CD.detectPlotBox(img);
+  assert.deepStrictEqual(box, { x0: 10, y0: 10, x1: 110, y1: 90 });
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 
