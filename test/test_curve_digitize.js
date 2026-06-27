@@ -131,6 +131,25 @@ check("extractCurves : croisement MEME couleur -> zone ambigue signalee", functi
   assert.ok(curves[0].ambiguous.length >= 1);
 });
 
+check("traceFromSeeds : separe 2 courbes meme couleur qui se croisent", function () {
+  const img = makeImage(120, 100);
+  const c = [0, 0, 0];
+  drawSeg(img, 20, 30, 100, 80, c); // A : monte (y pixel croit)
+  drawSeg(img, 20, 80, 100, 30, c); // B : descend (y pixel decroit)
+  const box = { x0: 10, y0: 10, x1: 110, y1: 90 };
+  const pixels = [];
+  for (let y = 11; y < 90; y++) for (let x = 11; x < 110; x++) {
+    const i = (y * img.width + x) * 4;
+    if (img.data[i] < 128) pixels.push({ x: x, y: y });
+  }
+  const traced = CD.traceFromSeeds(pixels, box, [{ x: 20, y: 30 }, { x: 20, y: 80 }]);
+  assert.strictEqual(traced.length, 2);
+  const a = traced[0].points, b = traced[1].points;
+  // A part haut (y~30) et finit bas (y~80) ; B l'inverse
+  assert.ok(a[a.length - 1].ypx > a[0].ypx);
+  assert.ok(b[b.length - 1].ypx < b[0].ypx);
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 

@@ -170,12 +170,52 @@
     });
   }
 
+  function nearestIndex(xs, x) {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < xs.length; i++) { const d = Math.abs(xs[i] - x); if (d < bd) { bd = d; best = i; } }
+    return best;
+  }
+
+  function traceFromSeeds(pixels, box, seeds) {
+    const byCol = {};
+    for (let k = 0; k < pixels.length; k++) {
+      const p = pixels[k];
+      (byCol[p.x] = byCol[p.x] || []).push(p.y);
+    }
+    const xs = Object.keys(byCol).map(Number).sort(function (a, b) { return a - b; });
+    return seeds.map(function (seed) {
+      function traceDir(dir) {
+        const pts = [];
+        let lastY = seed.y, lastX = seed.x, slope = 0;
+        let k = nearestIndex(xs, seed.x) + dir;
+        for (; k >= 0 && k < xs.length; k += dir) {
+          const x = xs[k];
+          const bands = columnBands(byCol[x]);
+          const pred = lastY + slope * (x - lastX);
+          let chosen = bands[0], best = Infinity;
+          for (let b = 0; b < bands.length; b++) {
+            const d = Math.abs(bands[b] - pred);
+            if (d < best) { best = d; chosen = bands[b]; }
+          }
+          if (x !== lastX) slope = (chosen - lastY) / (x - lastX);
+          pts.push({ xpx: x, ypx: chosen });
+          lastY = chosen; lastX = x;
+        }
+        return pts;
+      }
+      const left = traceDir(-1).reverse();
+      const right = traceDir(1);
+      return { points: left.concat([{ xpx: seed.x, ypx: seed.y }], right), ambiguous: [] };
+    });
+  }
+
   return {
     pixelsToData: pixelsToData,
     detectBackground: detectBackground,
     detectPlotBox: detectPlotBox,
     clusterCurveColors: clusterCurveColors,
     detectLineStyle: detectLineStyle,
-    extractCurves: extractCurves
+    extractCurves: extractCurves,
+    traceFromSeeds: traceFromSeeds
   };
 });
