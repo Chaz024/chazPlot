@@ -324,18 +324,54 @@
   // Mode manuel : masque des pixels dont la COULEUR est proche de celle cliquee
   // en (sx,sy). Isole une courbe precise meme quand l'auto a fusionne deux teintes
   // voisines (ex. deux oranges) : le clic choisit la couleur exacte. Distance L1
-  // en RGB <= tol. Renvoie [{x,y}] dans l'interieur de la boite.
+  // en RGB <= tol.
+  // Par defaut (connected=true) on ne garde que la composante RELIEE au clic, en
+  // pontant les petits trous jusqu'a `bridge` px (pour traverser les croisements
+  // de courbes) : ainsi un echantillon de legende de la meme couleur, isole dans
+  // un coin, est ECARTE. Renvoie {color, pixels:[{x,y}]} dans l'interieur de la boite.
   function colorMaskAt(img, box, sx, sy, opts) {
     opts = opts || {};
     const tol = opts.tol != null ? opts.tol : 70;
+    const connected = opts.connected !== false;
+    const bridge = opts.bridge != null ? opts.bridge : 8;
     const i0 = (sy * img.width + sx) * 4;
     const cr = img.data[i0], cg = img.data[i0 + 1], cb = img.data[i0 + 2];
+    function match(x, y) {
+      const i = (y * img.width + x) * 4;
+      return Math.abs(img.data[i] - cr) + Math.abs(img.data[i + 1] - cg) + Math.abs(img.data[i + 2] - cb) <= tol;
+    }
+    const x0 = box.x0 + 1, x1 = box.x1 - 1, y0 = box.y0 + 1, y1 = box.y1 - 1;
+    if (!connected) {
+      const out = [];
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (match(x, y)) out.push({ x: x, y: y });
+      return { color: [cr, cg, cb], pixels: out };
+    }
+    // composante reliee au clic, BFS avec pontage des trous <= bridge
+    const W = x1 - x0 + 1, H = y1 - y0 + 1;
+    const seen = new Uint8Array(W * H);
+    function idx(x, y) { return (y - y0) * W + (x - x0); }
+    // point de depart : pixel correspondant le plus proche du clic
+    let start = null;
+    for (let r = 0; r <= bridge + 2 && !start; r++) {
+      for (let dy = -r; dy <= r && !start; dy++) for (let dx = -r; dx <= r && !start; dx++) {
+        const x = sx + dx, y = sy + dy;
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1 && match(x, y)) start = { x: x, y: y };
+      }
+    }
     const out = [];
-    for (let y = box.y0 + 1; y < box.y1; y++) {
-      for (let x = box.x0 + 1; x < box.x1; x++) {
-        const i = (y * img.width + x) * 4;
-        if (Math.abs(img.data[i] - cr) + Math.abs(img.data[i + 1] - cg) + Math.abs(img.data[i + 2] - cb) <= tol) {
-          out.push({ x: x, y: y });
+    if (!start) return { color: [cr, cg, cb], pixels: out };
+    const queue = [start]; seen[idx(start.x, start.y)] = 1;
+    while (queue.length) {
+      const p = queue.pop();
+      out.push(p);
+      for (let dy = -bridge; dy <= bridge; dy++) {
+        for (let dx = -bridge; dx <= bridge; dx++) {
+          if (!dx && !dy) continue;
+          const x = p.x + dx, y = p.y + dy;
+          if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+          const k = idx(x, y);
+          if (seen[k] || !match(x, y)) continue;
+          seen[k] = 1; queue.push({ x: x, y: y });
         }
       }
     }

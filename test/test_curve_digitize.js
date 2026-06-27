@@ -221,6 +221,17 @@ check("colorMaskAt : isole la couleur cliquee, ignore l'autre", function () {
   assert.ok(mask.pixels.every(function (p) { return Math.abs(p.y - 40) <= 2; }), "n'inclut pas la courbe peche (y=60)");
 });
 
+check("colorMaskAt : exclut un echantillon de legende deconnecte (meme couleur)", function () {
+  const img = makeImage(200, 140);
+  const box = { x0: 10, y0: 10, x1: 190, y1: 130 };
+  const red = [220, 30, 30];
+  for (let x = 20; x < 180; x++) setPx(img, x, 40, red);   // la courbe
+  for (let x = 30; x < 70; x++) setPx(img, x, 115, red);   // swatch de legende, meme couleur, deconnecte
+  const m = CD.colorMaskAt(img, box, 100, 40);             // clic sur la courbe
+  assert.ok(m.pixels.length > 100, "capture la courbe");
+  assert.ok(m.pixels.every(function (p) { return p.y < 60; }), "n'inclut pas le swatch (y=115)");
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 
