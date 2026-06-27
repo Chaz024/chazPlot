@@ -175,6 +175,30 @@ check("buildSpec : echelle log reportee dans le layout", function () {
   assert.strictEqual(spec.plotly.layout.xaxis.type, "log");
 });
 
+check("clusterCurveColors : image anti-aliasee + grille -> 2 clusters (pas 50)", function () {
+  const img = makeImage(200, 140);
+  const box = { x0: 10, y0: 10, x1: 190, y1: 130 };
+  drawVLine(img, 10, 10, 130, [0, 0, 0]); drawVLine(img, 190, 10, 130, [0, 0, 0]);
+  drawHLine(img, 10, 10, 190, [0, 0, 0]); drawHLine(img, 130, 10, 190, [0, 0, 0]);
+  // grille gris clair (doit etre ignoree)
+  drawHLine(img, 70, 11, 189, [200, 200, 200]);
+  drawVLine(img, 100, 11, 129, [200, 200, 200]);
+  // deux courbes pointillees de couleurs distinctes, avec halo anti-aliasing
+  function blend(c) { return [Math.round((c[0] + 255) / 2), Math.round((c[1] + 255) / 2), Math.round((c[2] + 255) / 2)]; }
+  function aaDot(x, y, core) {
+    setPx(img, x, y, core); const h = blend(core);
+    setPx(img, x - 1, y, h); setPx(img, x + 1, y, h); setPx(img, x, y - 1, h); setPx(img, x, y + 1, h);
+  }
+  const red = [220, 20, 20], blue = [20, 20, 220];
+  for (let x = 20; x < 180; x += 4) { aaDot(x, 40, red); aaDot(x, 100, blue); }
+  const clusters = CD.clusterCurveColors(img, box);
+  assert.strictEqual(clusters.length, 2, "attendu 2 clusters, obtenu " + clusters.length);
+  const reds = clusters.filter(function (c) { return c.color[0] > c.color[2] + 40; });
+  const blues = clusters.filter(function (c) { return c.color[2] > c.color[0] + 40; });
+  assert.strictEqual(reds.length, 1, "1 cluster rouge");
+  assert.strictEqual(blues.length, 1, "1 cluster bleu");
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 

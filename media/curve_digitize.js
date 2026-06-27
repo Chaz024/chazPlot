@@ -60,29 +60,71 @@
     return { x0: cols[0], y0: rows[0], x1: cols[cols.length - 1], y1: rows[rows.length - 1] };
   }
 
+  // Teinte HSV en degres [0,360), ou -1 si achromatique (gris/noir/blanc).
+  function rgbHue(r, g, b) {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d === 0) return -1;
+    let h;
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60; if (h < 0) h += 360;
+    return h;
+  }
+  function hueDist(a, b) { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+
+  // Regroupe les pixels de courbe par TEINTE (et un bucket "sombre" pour le noir).
+  // Robuste a l'anti-aliasing : un halo clair garde la teinte de la courbe et
+  // rejoint son cluster, tandis que les gris clairs (grille, halo desature) sont
+  // ecartes. La couleur representative est le pixel le plus sature (le coeur du
+  // trait), pas la moyenne delavee. Filtre le bruit par fraction du total.
   function clusterCurveColors(img, box, opts) {
     opts = opts || {};
     const bg = opts.bg || detectBackground(img, box);
-    const bgDist = opts.bgDist != null ? opts.bgDist : 40;
-    const mergeTol = opts.mergeTol != null ? opts.mergeTol : 40;
+    const bgDist = opts.bgDist != null ? opts.bgDist : 50;
+    const satMin = opts.satMin != null ? opts.satMin : 0.25;
+    const darkMax = opts.darkMax != null ? opts.darkMax : 110;
+    const hueTol = opts.hueTol != null ? opts.hueTol : 25;
     const minPixels = opts.minPixels != null ? opts.minPixels : 8;
-    const clusters = [];
+    const minFrac = opts.minFrac != null ? opts.minFrac : 0.02;
+    const chrom = [];
+    let dark = null, total = 0;
     for (let y = box.y0 + 1; y < box.y1; y++) {
       for (let x = box.x0 + 1; x < box.x1; x++) {
         const i = (y * img.width + x) * 4;
         const r = img.data[i], g = img.data[i + 1], b = img.data[i + 2];
         if (Math.abs(r - bg.r) + Math.abs(g - bg.g) + Math.abs(b - bg.b) < bgDist) continue;
-        let found = null;
-        for (let k = 0; k < clusters.length; k++) {
-          const c = clusters[k].color;
-          if (Math.abs(c[0] - r) + Math.abs(c[1] - g) + Math.abs(c[2] - b) <= mergeTol) { found = clusters[k]; break; }
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        const sat = mx === 0 ? 0 : (mx - mn) / mx;
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (sat < satMin) {
+          // gris : on ne garde que le sombre (trait noir), pas grille / halo clair
+          if (lum > darkMax) continue;
+          if (!dark) dark = { hue: -1, pixels: [], color: [r, g, b], bestSat: -1 };
+          dark.pixels.push({ x: x, y: y }); total++;
+          continue;
         }
-        if (found) found.pixels.push({ x: x, y: y });
-        else clusters.push({ color: [r, g, b], pixels: [{ x: x, y: y }] });
+        const h = rgbHue(r, g, b);
+        let found = null, fd = Infinity;
+        for (let k = 0; k < chrom.length; k++) {
+          const d = hueDist(chrom[k].hue, h);
+          if (d < fd) { fd = d; found = chrom[k]; }
+        }
+        if (found && fd <= hueTol) {
+          found.pixels.push({ x: x, y: y });
+          if (sat > found.bestSat) { found.bestSat = sat; found.color = [r, g, b]; found.hue = h; }
+        } else {
+          chrom.push({ hue: h, pixels: [{ x: x, y: y }], color: [r, g, b], bestSat: sat });
+        }
+        total++;
       }
     }
-    return clusters
-      .filter(function (c) { return c.pixels.length >= minPixels; })
+    const all = chrom.slice();
+    if (dark) all.push(dark);
+    const minN = Math.max(minPixels, Math.floor(total * minFrac));
+    return all
+      .filter(function (c) { return c.pixels.length >= minN; })
+      .map(function (c) { return { color: c.color, pixels: c.pixels }; })
       .sort(function (a, b) { return b.pixels.length - a.pixels.length; });
   }
 
