@@ -52,11 +52,11 @@
         if (isAxisPixel(img.data[i], img.data[i + 1], img.data[i + 2])) { colCount[x]++; rowCount[y]++; }
       }
     }
-    const vThresh = (opts.vFrac || 0.5) * H, hThresh = (opts.hFrac || 0.5) * W;
+    const vThresh = (opts.vFrac != null ? opts.vFrac : 0.5) * H, hThresh = (opts.hFrac != null ? opts.hFrac : 0.5) * W;
     const cols = [], rows = [];
     for (let x = 0; x < W; x++) if (colCount[x] >= vThresh) cols.push(x);
     for (let y = 0; y < H; y++) if (rowCount[y] >= hThresh) rows.push(y);
-    if (!cols.length || !rows.length) return null;
+    if (cols.length < 2 || rows.length < 2) return null;
     return { x0: cols[0], y0: rows[0], x1: cols[cols.length - 1], y1: rows[rows.length - 1] };
   }
 
