@@ -106,6 +106,31 @@ check("detectLineStyle : solid / dashed / dotted / markers", function () {
   assert.strictEqual(CD.detectLineStyle(markers, box).style, "markers");
 });
 
+check("extractCurves : courbe simple, pas d'ambiguite", function () {
+  const img = makeImage(120, 100);
+  const box = { x0: 10, y0: 10, x1: 110, y1: 90 };
+  drawSeg(img, 20, 80, 100, 30, [220, 0, 0]);
+  const clusters = CD.clusterCurveColors(img, box);
+  const curves = CD.extractCurves(clusters, box);
+  assert.strictEqual(curves.length, 1);
+  assert.ok(curves[0].points.length > 50);
+  assert.strictEqual(curves[0].ambiguous.length, 0);
+  // monotonie globale : y pixel decroit quand x croit
+  const first = curves[0].points[0], last = curves[0].points[curves[0].points.length - 1];
+  assert.ok(last.ypx < first.ypx);
+});
+
+check("extractCurves : croisement MEME couleur -> zone ambigue signalee", function () {
+  const img = makeImage(120, 100);
+  const box = { x0: 10, y0: 10, x1: 110, y1: 90 };
+  drawSeg(img, 20, 30, 100, 80, [0, 0, 0]);
+  drawSeg(img, 20, 80, 100, 30, [0, 0, 0]);
+  const clusters = CD.clusterCurveColors(img, box, { bg: { r: 255, g: 255, b: 255 } });
+  const curves = CD.extractCurves(clusters, box);
+  // une seule couleur -> un cluster, croisement -> ambigu
+  assert.ok(curves[0].ambiguous.length >= 1);
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 

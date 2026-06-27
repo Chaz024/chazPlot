@@ -112,11 +112,70 @@
     return { style: "dotted" };
   }
 
+  function columnBands(ys) {
+    ys = ys.slice().sort(function (a, b) { return a - b; });
+    const bands = [];
+    let start = ys[0], prev = ys[0];
+    for (let i = 1; i < ys.length; i++) {
+      if (ys[i] - prev > 1) { bands.push((start + prev) / 2); start = ys[i]; }
+      prev = ys[i];
+    }
+    bands.push((start + prev) / 2);
+    return bands;
+  }
+
+  function extractCurves(clusters, box, opts) {
+    opts = opts || {};
+    return clusters.map(function (c) {
+      const byCol = {};
+      for (let k = 0; k < c.pixels.length; k++) {
+        const p = c.pixels[k];
+        (byCol[p.x] = byCol[p.x] || []).push(p.y);
+      }
+      const xs = Object.keys(byCol).map(Number).sort(function (a, b) { return a - b; });
+      const points = [], ambiguous = [];
+      let lastY = null, lastX = null, slope = 0;
+      for (let j = 0; j < xs.length; j++) {
+        const x = xs[j];
+        const bands = columnBands(byCol[x]);
+        let chosen;
+        if (bands.length === 1) {
+          chosen = bands[0];
+        } else {
+          const pred = lastY != null ? lastY + slope * (x - lastX) : bands[0];
+          chosen = bands[0]; let best = Infinity;
+          for (let b = 0; b < bands.length; b++) {
+            const d = Math.abs(bands[b] - pred);
+            if (d < best) { best = d; chosen = bands[b]; }
+          }
+          ambiguous.push({ x0: x, x1: x });
+        }
+        if (lastY != null && x > lastX) slope = (chosen - lastY) / (x - lastX);
+        points.push({ xpx: x, ypx: chosen });
+        lastY = chosen; lastX = x;
+      }
+      const merged = [];
+      for (let a = 0; a < ambiguous.length; a++) {
+        const m = merged[merged.length - 1];
+        if (m && ambiguous[a].x0 <= m.x1 + 1) m.x1 = ambiguous[a].x1;
+        else merged.push({ x0: ambiguous[a].x0, x1: ambiguous[a].x1 });
+      }
+      return {
+        color: c.color,
+        style: detectLineStyle(c.pixels, box).style,
+        pixels: c.pixels,
+        points: points,
+        ambiguous: merged
+      };
+    });
+  }
+
   return {
     pixelsToData: pixelsToData,
     detectBackground: detectBackground,
     detectPlotBox: detectPlotBox,
     clusterCurveColors: clusterCurveColors,
-    detectLineStyle: detectLineStyle
+    detectLineStyle: detectLineStyle,
+    extractCurves: extractCurves
   };
 });
