@@ -231,6 +231,28 @@
     });
   }
 
+  const DASH_FOR = { solid: "solid", dashed: "dash", dotted: "dot", markers: "solid" };
+  function rgbCss(c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
+
+  function buildSpec(curves, box, calib, title) {
+    const data = curves.map(function (c, i) {
+      const pts = pixelsToData(c.points, box, calib);
+      return {
+        type: "scatter",
+        mode: c.style === "markers" ? "markers" : "lines",
+        x: pts.map(function (p) { return p.x; }),
+        y: pts.map(function (p) { return p.y; }),
+        line: { color: rgbCss(c.color), dash: DASH_FOR[c.style] || "solid" },
+        marker: { color: rgbCss(c.color) },
+        name: c.name || ("courbe " + (i + 1))
+      };
+    });
+    const layout = { xaxis: {}, yaxis: {} };
+    if (calib.xlog) layout.xaxis.type = "log";
+    if (calib.ylog) layout.yaxis.type = "log";
+    return { title: title || "", plotly: { data: data, layout: layout } };
+  }
+
   return {
     pixelsToData: pixelsToData,
     detectBackground: detectBackground,
@@ -238,6 +260,7 @@
     clusterCurveColors: clusterCurveColors,
     detectLineStyle: detectLineStyle,
     extractCurves: extractCurves,
-    traceFromSeeds: traceFromSeeds
+    traceFromSeeds: traceFromSeeds,
+    buildSpec: buildSpec
   };
 });

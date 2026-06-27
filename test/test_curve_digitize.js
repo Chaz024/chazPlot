@@ -150,6 +150,31 @@ check("traceFromSeeds : separe 2 courbes meme couleur qui se croisent", function
   assert.ok(b[b.length - 1].ypx < b[0].ypx);
 });
 
+check("buildSpec : produit une spec scatter calibree", function () {
+  const box = { x0: 0, y0: 0, x1: 100, y1: 100 };
+  const calib = { xmin: 0, xmax: 10, ymin: 0, ymax: 10, xlog: false, ylog: false };
+  const curves = [
+    { color: [220, 0, 0], style: "solid", points: [{ xpx: 0, ypx: 100 }, { xpx: 100, ypx: 0 }], name: "rouge" },
+    { color: [0, 0, 0], style: "markers", points: [{ xpx: 50, ypx: 50 }] }
+  ];
+  const spec = CD.buildSpec(curves, box, calib, "Test");
+  assert.strictEqual(spec.title, "Test");
+  assert.strictEqual(spec.plotly.data.length, 2);
+  assert.strictEqual(spec.plotly.data[0].type, "scatter");
+  assert.strictEqual(spec.plotly.data[0].mode, "lines");
+  assert.strictEqual(spec.plotly.data[1].mode, "markers");
+  assert.deepStrictEqual(spec.plotly.data[0].x, [0, 10]);
+  assert.deepStrictEqual(spec.plotly.data[0].y, [0, 10]);
+  assert.strictEqual(spec.plotly.data[0].name, "rouge");
+});
+
+check("buildSpec : echelle log reportee dans le layout", function () {
+  const box = { x0: 0, y0: 0, x1: 100, y1: 100 };
+  const calib = { xmin: 1, xmax: 100, ymin: 0, ymax: 1, xlog: true, ylog: false };
+  const spec = CD.buildSpec([{ color: [0, 0, 0], style: "solid", points: [{ xpx: 0, ypx: 0 }] }], box, calib, "");
+  assert.strictEqual(spec.plotly.layout.xaxis.type, "log");
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 
