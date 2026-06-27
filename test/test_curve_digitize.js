@@ -199,6 +199,28 @@ check("clusterCurveColors : image anti-aliasee + grille -> 2 clusters (pas 50)",
   assert.strictEqual(blues.length, 1, "1 cluster bleu");
 });
 
+check("clusterCurveColors : amas clairseme plein-largeur (bruit) ecarte", function () {
+  const img = makeImage(200, 140);
+  const box = { x0: 10, y0: 10, x1: 190, y1: 130 };
+  // une vraie courbe rouge dense
+  for (let x = 20; x < 180; x++) setPx(img, x, 60, [220, 0, 0]);
+  // bruit noir clairseme sur toute la largeur (1 pixel toutes les 20 colonnes)
+  for (let x = 20; x < 180; x += 20) setPx(img, x, 100, [0, 0, 0]);
+  const clusters = CD.clusterCurveColors(img, box);
+  assert.strictEqual(clusters.length, 1, "seule la courbe dense survit");
+  assert.ok(clusters[0].color[0] > 150 && clusters[0].color[2] < 80, "rouge");
+});
+
+check("colorMaskAt : isole la couleur cliquee, ignore l'autre", function () {
+  const img = makeImage(120, 100);
+  const box = { x0: 10, y0: 10, x1: 110, y1: 90 };
+  for (let x = 20; x < 100; x++) { setPx(img, x, 40, [230, 100, 10]); setPx(img, x, 60, [250, 185, 100]); }
+  const mask = CD.colorMaskAt(img, box, 50, 40); // clic sur l'orange fonce
+  assert.deepStrictEqual(mask.color, [230, 100, 10]);
+  assert.ok(mask.pixels.length > 50, "capture la courbe cliquee");
+  assert.ok(mask.pixels.every(function (p) { return Math.abs(p.y - 40) <= 2; }), "n'inclut pas la courbe peche (y=60)");
+});
+
 // exporter les helpers pour les taches suivantes du meme fichier
 module.exports = { makeImage: makeImage, setPx: setPx, drawHLine: drawHLine, drawVLine: drawVLine, drawSeg: drawSeg };
 

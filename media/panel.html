@@ -7123,32 +7123,38 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   });
 
   // Mode manuel : clic d'amorce sur le canvas pour chaque courbe litigieuse
-  let digManual = false, digSeeds = [];
+  // Mode manuel COLORIMETRIQUE : on repart de zero et chaque clic sur un trait
+  // ajoute UNE courbe de la couleur cliquee (isole meme deux teintes voisines que
+  // l'auto fusionne, ex. deux oranges). Clic droit = annuler le dernier ajout.
+  let digManual = false;
   document.getElementById("digManualBtn").addEventListener("click", function () {
-    digManual = true; digSeeds = [];
-    vscodeApi.postMessage({ type: "notify", level: "info", text: "Chaz Plots : mode manuel — cliquez un point de depart sur chaque courbe, puis « Nouvelle figure »." });
+    digManual = true; digState.curves = [];
+    renderDigCurveList();
+    vscodeApi.postMessage({ type: "notify", level: "info", text: "Chaz Plots : mode manuel — cliquez UNE fois sur chaque courbe (sur le trait). Clic droit pour annuler le dernier. Puis « Nouvelle figure »." });
   });
-  document.getElementById("digCanvas").addEventListener("click", function (ev) {
-    if (!digManual) return;
+  function digManualPick(ev) {
     const canvas = document.getElementById("digCanvas");
     const r = canvas.getBoundingClientRect();
     const x = Math.round((ev.clientX - r.left) * canvas.width / r.width);
     const y = Math.round((ev.clientY - r.top) * canvas.height / r.height);
-    digSeeds.push({ x: x, y: y });
-    // masque = tous les pixels d'avant-plan dans la boite
     const img = digState.img, box = digState.box;
-    const bg = CurveDigitize.detectBackground(img, box);
-    const mask = [];
-    for (let yy = box.y0 + 1; yy < box.y1; yy++) {
-      for (let xx = box.x0 + 1; xx < box.x1; xx++) {
-        const pi = (yy * img.width + xx) * 4;
-        if (Math.abs(img.data[pi] - bg.r) + Math.abs(img.data[pi + 1] - bg.g) + Math.abs(img.data[pi + 2] - bg.b) >= 40)
-          mask.push({ x: xx, y: yy });
-      }
+    const m = CurveDigitize.colorMaskAt(img, box, x, y);
+    if (m.pixels.length < 10) {
+      vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : aucun trait ici — cliquez bien sur la courbe." });
+      return;
     }
-    const traced = CurveDigitize.traceFromSeeds(mask, box, digSeeds);
-    digState.curves = traced.map(function (t, i) { return { color: [30, 30, 30], style: "solid", points: t.points, ambiguous: [], name: "courbe " + (i + 1) }; });
+    const t = CurveDigitize.traceFromSeeds(m.pixels, box, [{ x: x, y: y }])[0];
+    const style = CurveDigitize.detectLineStyle(m.pixels, box).style;
+    digState.curves.push({ color: m.color, style: style, points: t.points, ambiguous: [], name: "courbe " + (digState.curves.length + 1) });
     renderDigCurveList();
+  }
+  document.getElementById("digCanvas").addEventListener("click", function (ev) {
+    if (digManual) digManualPick(ev);
+  });
+  document.getElementById("digCanvas").addEventListener("contextmenu", function (ev) {
+    if (!digManual) return;
+    ev.preventDefault();
+    if (digState.curves.length) { digState.curves.pop(); renderDigCurveList(); }
   });
 
   // Entree 1 : bouton barre d'outils — reutilise l'input file cache de l'import image
