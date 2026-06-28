@@ -217,40 +217,77 @@ function injectEnvironment(port) {
   env.replace("VSCODE_PLOTS_PDF", cfg.get("includePdf", true) ? "1" : "0");
   env.replace("VSCODE_PLOTS_PLOTLY_PNG", cfg.get("preRenderPlotlyPng", false) ? "1" : "0");
   env.replace("VSCODE_PLOTS_PLOTLY_PDF", cfg.get("preRenderPlotlyPdf", false) ? "1" : "0");
+  // Encodeurs d'animation : GIF par defaut (cout negligeable), MP4 opt-in
+  // (peut bloquer plt.show() plusieurs secondes => laisse l'utilisateur activer).
+  env.replace("VSCODE_PLOTS_GIF", cfg.get("includeGif", true) ? "1" : "0");
+  env.replace("VSCODE_PLOTS_MP4", cfg.get("includeMp4", false) ? "1" : "0");
   env.prepend("PYTHONPATH", pyDir + path.delimiter);
 }
 
 // ------------------------------------------------------------
 // Gestion des figures
 // ------------------------------------------------------------
+// Live update (opt-in via chazPlots.replaceOnSameProvenance, defaut false) :
+// si une figure deja connue a la meme cle de provenance (script + ligne du
+// plt.show()) et le meme titre, on mute son contenu au lieu d'en empiler une
+// nouvelle. Preserve id, tags, ts. Defaut OFF pour proteger le cas frequent
+// des etudes parametriques en boucle for (un plt.show() par valeur).
+const ReplacePolicy = require("./media/replace_policy.js");
+
 // Construit une `fig` normalisee depuis le payload /figure (chaque format
 // optionnel -> null si absent), lui attribue un id, la persiste, ouvre le
 // panneau si besoin et l'envoie au webview.
 function addFigure(data) {
   const hasFrames = Array.isArray(data.frames) && data.frames.length > 0;
-  const fig = {
-    id: nextId,
+  const incoming = {
     plotly: data.plotly && typeof data.plotly === "object" ? data.plotly : null,
     pgf: typeof data.pgf === "string" && data.pgf.length > 0 ? data.pgf : null,
     svg: typeof data.svg === "string" && data.svg.length > 0 ? data.svg : null,
     png: typeof data.png === "string" && data.png.length > 0 ? data.png : null,
     pdf: typeof data.pdf === "string" && data.pdf.length > 0 ? data.pdf : null,
+    gif: typeof data.gif === "string" && data.gif.length > 0 ? data.gif : null,
+    mp4: typeof data.mp4 === "string" && data.mp4.length > 0 ? data.mp4 : null,
     frames: hasFrames ? data.frames : null,
     interval: hasFrames ? Number(data.interval) || 100 : null,
     render: data.render && typeof data.render === "object" ? data.render : null,
-    // Figure construite sous un style science : par defaut l'export puise dans
-    // les assets matplotlib (propres) plutot que dans le rendu Plotly. Toggle
-    // override cote webview (message setExportSource).
     sciencePlot: data.sciencePlot === true,
     provenance: data.provenance && typeof data.provenance === "object" ? data.provenance : null,
     title: data.title ? String(data.title) : "Figure " + String(nextId),
-    tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-    ts: new Date().toLocaleTimeString()
   };
+  const cfg = vscode.workspace.getConfiguration("chazPlots");
+  // Dedup re-run identique (option (a) : signature contenu). Si la MEME figure
+  // (meme script+ligne ET meme rendu) est re-emise, on rafraichit la carte au
+  // lieu d'empiler -> pas de 40 doublons quand on relance un script inchange.
+  // Des qu'un parametre change le rendu, la signature differe -> nouvelle carte
+  // (on garde l'ancienne pour comparer). Defaut ON.
+  if (cfg.get("refreshIdenticalReruns", true)) {
+    const dup = ReplacePolicy.findDedupTarget(figures, incoming);
+    if (dup) {
+      dup.ts = new Date().toLocaleTimeString();
+      try { storage.save(dup); } catch (e) { /* best-effort */ }
+      ensurePanel(cfg.get("autoReveal", true));
+      postToWebview({ type: "update", fig: dup });
+      return;
+    }
+  }
+  // Opt-in : remplace en place la cible au lieu d'empiler.
+  if (cfg.get("replaceOnSameProvenance", false)) {
+    const target = ReplacePolicy.findReplaceTarget(figures, incoming);
+    if (target) {
+      // Conserve le titre existant (le titre sert de discriminateur) ; mute le contenu.
+      ReplacePolicy.mergeReplace(target, incoming);
+      try { storage.save(target); } catch (e) { /* best-effort */ }
+      ensurePanel(cfg.get("autoReveal", true));
+      postToWebview({ type: "update", fig: target });
+      return;
+    }
+  }
+  const fig = Object.assign({ id: nextId }, incoming,
+    { tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+      ts: new Date().toLocaleTimeString() });
   nextId = nextId + 1;
   figures.push(fig);
 
-  const cfg = vscode.workspace.getConfiguration("chazPlots");
   if (cfg.get("persistFigures", true)) { storage.save(fig); }
 
   ensurePanel(cfg.get("autoReveal", true));
@@ -430,6 +467,56 @@ function editTags(id) {
 // ------------------------------------------------------------
 // Enregistrement
 // ------------------------------------------------------------
+// Sauvegarde d'une animation en GIF ou MP4. Le binaire est deja encode
+// dans fig.gif / fig.mp4 (produits par le backend a plt.show() si les
+// reglages includeGif / includeMp4 sont actives ; depend de ffmpeg sur
+// PATH pour MP4). Les frames PNG restent accessibles via le bouton Save
+// classique (PNG par defaut).
+function saveAnimation(id, format) {
+  const fig = figures.find(function (f) { return f.id === id; });
+  if (!fig) { return; }
+  if (format !== "gif" && format !== "mp4") {
+    vscode.window.showWarningMessage("Chaz Plots : format d'animation inconnu (" + String(format) + ").");
+    return;
+  }
+  const b64 = format === "gif" ? fig.gif : fig.mp4;
+  if (!b64) {
+    const settingName = format === "gif"
+      ? "chazPlots.includeGif"
+      : "chazPlots.includeMp4 (et ffmpeg sur PATH)";
+    vscode.window.showWarningMessage(
+      "Chaz Plots : aucun " + format.toUpperCase()
+      + " disponible pour cette animation. Activez " + settingName + "."
+    );
+    return;
+  }
+  const filters = format === "gif"
+    ? { "Image GIF (anime)": ["gif"] }
+    : { "Video MP4": ["mp4"] };
+  vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(path.join(workspaceDir(), defaultName(fig, format))),
+    filters: filters,
+  }).then(function (uri) {
+    if (!uri) { return; }
+    try {
+      fs.writeFileSync(uri.fsPath, Buffer.from(b64, "base64"));
+      vscode.window.showInformationMessage("Animation enregistree : " + uri.fsPath);
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        "Chaz Plots : echec d'enregistrement " + format.toUpperCase() + " (" + String(err) + ")."
+      );
+    }
+  });
+}
+
+// Variante de saveOne appelee par la modale d'apercu (panel.html) : les
+// options sont deja choisies par l'utilisateur, on bypass les QuickPicks
+// cote extension.
+async function saveWith(id, frameIndex, options) {
+  return await saveOne(id, frameIndex, options || {});
+}
+
+
 function defaultName(fig, ext) {
   const clean = fig.title.replace(/[^a-zA-Z0-9_\-]+/g, "_").slice(0, 40);
   const base = clean.length > 0 ? clean : "figure_" + String(fig.id);
@@ -629,12 +716,19 @@ async function plotlyExportOptions(fig) {
   };
 }
 
-// Enregistre UNE figure. Deux chemins :
-//   - figure Plotly : seul le webview detient la figure vivante, donc on lui
-//     demande l'image (postMessage exportPlotly + requestId) ; la reponse
-//     revient dans finishPlotlyExport via le message exportResult.
-//   - sinon (png/svg/animation) : ecriture synchrone par writeFigure.
-async function saveOne(id, frameIndex) {
+// Enregistre UNE figure. Trois chemins (selon le format disponible, le
+// contexte compare/regular, et si la webview a deja les options via
+// saveWith / la modale d'apercu) :
+//   - figure Plotly non-editee + options deja connues : export async via
+//     webview (postMessage exportPlotly + requestId ; reponse dans
+//     finishPlotlyExport via le message exportResult).
+//   - figure Plotly + pas d'options : extension montre le QuickPick
+//     (plotlyExportOptions) pour demander DPI/fond/format.
+//   - sinon (png/svg/pdf natif/animation) : ecriture synchrone par writeFigure.
+// optionsOverride (optionnel) : {format, dpi, scale, transparent, allowNative}
+// envoye par le webview (modale d'apercu). Court-circuite plotlyExportOptions.
+// Pour une GIF/MP4 d'animation, passer par saveAnimation().
+async function saveOne(id, frameIndex, optionsOverride) {
   const fig = (id === "compare")
     ? { id: "compare", title: "comparaison", plotly: true, frames: null, pdf: "__present__" }
     : figures.find(function (f) { return f.id === id; });
@@ -647,8 +741,16 @@ async function saveOne(id, frameIndex) {
     && !fig.edited && (fig.png || fig.svg || fig.pdf));
 
   if (fig.plotly && !fig.frames && !matplotlibExport) {
-    const options = await plotlyExportOptions(fig);
-    if (!options) { return; }
+    // La webview a deja choisi format / DPI / fond via la modale d'apercu ?
+    // Si oui on bypass les QuickPicks cote extension. Si l'objet est vide /
+    // absent / sans format defini -> on demande.
+    let options;
+    if (optionsOverride && typeof optionsOverride === "object" && optionsOverride.format) {
+      options = optionsOverride;
+    } else {
+      options = await plotlyExportOptions(fig);
+      if (!options) { return; }
+    }
     const isPdf = options.format === "pdf";
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(workspaceDir(), defaultName(fig, options.format))),
@@ -701,6 +803,8 @@ function finishPlotlyExport(msg) {
   delete pendingExports[msg.requestId];
   const batch = request.batch || null;   // export groupe (saveAll) : compte agrege
   if (!msg.ok) {
+    // Annulation depuis la modale d'apercu PDF : nettoyage silencieux.
+    if (msg.error === "__cancel__") { if (batch) { finishExportBatchTick(batch); } return; }
     if (!batch) {
       vscode.window.showErrorMessage("Chaz Plots : echec de l'export Plotly (" + String(msg.error || "erreur inconnue") + ")");
     }
@@ -963,6 +1067,8 @@ function setupPanel(p) {
 
   p.webview.onDidReceiveMessage(function (msg) {
     if (msg.type === "save") { saveOne(msg.id, msg.frameIndex); }
+    else if (msg.type === "saveAnimation") { saveAnimation(msg.id, msg.format); }
+    else if (msg.type === "saveWith") { saveWith(msg.id, msg.frameIndex, msg.options); }
     else if (msg.type === "copyPgf") { copyPgf(msg.id); }
     else if (msg.type === "savePgf") { savePgf(msg.id); }
     else if (msg.type === "exportResult") { finishPlotlyExport(msg); }
@@ -996,6 +1102,19 @@ function setupPanel(p) {
       } catch (e) { /* lecture impossible */ }
     }
     else if (msg.type === "createFigureFromData") { createFigureFromData(msg.title, msg.plotly); }
+    else if (msg.type === "generateModelCode") {
+      // Code matplotlib reproduisant le MODELE ajuste (equation), pas un dump de points.
+      try {
+        const header = "# Code genere par Chaz Plots : courbe(s) reconstruite(s) par leur EQUATION ajustee.\n\n";
+        vscode.workspace.openTextDocument({ language: "python", content: header + String(msg.code || "") })
+          .then(function (doc) { return vscode.window.showTextDocument(doc); })
+          .then(undefined, function (err) {
+            vscode.window.showErrorMessage("Chaz Plots : impossible d'ouvrir l'editeur (" + String(err) + ")");
+          });
+      } catch (e) {
+        vscode.window.showErrorMessage("Chaz Plots : echec de la generation du code (" + String(e) + ")");
+      }
+    }
     else if (msg.type === "generateCodeFromSpec") {
       try {
         const code = PlotlyToPy.toMatplotlib({ title: msg.title || "", plotly: msg.spec });
@@ -1136,6 +1255,9 @@ function webviewHtml(webview) {
   const curveDigitizeUri = webview.asWebviewUri(
     vscode.Uri.file(path.join(extContext.extensionPath, "media", "curve_digitize.js"))
   );
+  const curveFitUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(extContext.extensionPath, "media", "curve_fit.js"))
+  );
   const htmlPath = path.join(extContext.extensionPath, "media", "panel.html");
   let template = null;
   try {
@@ -1165,7 +1287,8 @@ function webviewHtml(webview) {
       .replace(/{{autoscaleUri}}/g, String(autoscaleUri))
       .replace(/{{dataImportUri}}/g, String(dataImportUri))
       .replace(/{{boardLayoutUri}}/g, String(boardLayoutUri))
-      .replace(/{{curveDigitizeUri}}/g, String(curveDigitizeUri));
+      .replace(/{{curveDigitizeUri}}/g, String(curveDigitizeUri))
+      .replace(/{{curveFitUri}}/g, String(curveFitUri));
   }
   // media/panel.html introuvable : l'extension est mal installee.
   return [

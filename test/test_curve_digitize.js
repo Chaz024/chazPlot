@@ -309,6 +309,22 @@ check("detectLineStyle : tiret-point (dashdot) distingue de dashed", function ()
   assert.strictEqual(CD.detectLineStyle(px, box).style, "dashdot");
 });
 
+check("detectLineStyle : tirets EPAIS a petits trous (cov haute) -> dashed, pas solid", function () {
+  const box = { x0: 0, y0: 0, x1: 700, y1: 50 };
+  const px = [];
+  // periode 27 : tiret de 24 (hauteur 5) + trou de 3 -> couverture ~0.89 mais 26 plages
+  for (let x = 0; x < 700; x++) if ((x % 27) < 24) for (let dy = 0; dy < 5; dy++) px.push({ x: x, y: 22 + dy });
+  assert.strictEqual(CD.detectLineStyle(px, box).style, "dashed");
+});
+
+check("detectLineStyle : tiret-point EPAIS (cov haute) -> dashdot", function () {
+  const box = { x0: 0, y0: 0, x1: 700, y1: 50 };
+  const px = [];
+  // periode 43 : tiret 30 (h5), trou 4, point 5 (h5), trou 4
+  for (let x = 0; x < 700; x++) { const m = x % 43; if (m < 30 || (m >= 34 && m < 39)) for (let dy = 0; dy < 5; dy++) px.push({ x: x, y: 22 + dy }); }
+  assert.strictEqual(CD.detectLineStyle(px, box).style, "dashdot");
+});
+
 check("bridgeGaps : comble les trous de tirets par interpolation lineaire", function () {
   const pts = [{ xpx: 0, ypx: 10 }, { xpx: 1, ypx: 11 }, { xpx: 2, ypx: 12 }, { xpx: 7, ypx: 17 }, { xpx: 8, ypx: 18 }, { xpx: 9, ypx: 19 }];
   const out = CD.bridgeGaps(pts, { maxGap: 6 });

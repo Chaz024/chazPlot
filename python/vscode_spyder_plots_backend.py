@@ -300,9 +300,139 @@ def _make_frame_collector(fps, dpi):
     return _FrameCollector()
 
 
+def _include_gif():
+    """Active l'encodage GIF (PillowWriter). Opt-in 1/0 ; defaut ON
+    (cout ~150-300ms par animation, negligeable cote UX)."""
+    raw = os.environ.get("VSCODE_PLOTS_GIF")
+    if raw is None:
+        return True
+    return raw == "1"
+
+
+def _include_mp4():
+    """Active l'encodage MP4 (ffmpeg + libx264 via image2pipe). Opt-in 1/0 ;
+    defaut OFF car peut bloquer plt.show() plusieurs secondes par animation
+    longue. L'utilisateur l'active dans user settings."""
+    raw = os.environ.get("VSCODE_PLOTS_MP4")
+    if raw is None:
+        return False
+    return raw == "1"
+
+
+def _encode_animation_gif(frames_b64, interval_ms):
+    """Frames PNG base64 -> GIF base64 via PIL/Pillow. Best-effort : renvoie
+    None en cas d'echec (log sur stderr). Pillow est toujours disponible (deja
+    dependencia de matplotlib)."""
+    if not frames_b64:
+        return None
+    try:
+        from PIL import Image
+        import io as _io
+        images = []
+        for b64 in frames_b64:
+            try:
+                images.append(Image.open(_io.BytesIO(base64.b64decode(b64))).convert("RGB"))
+            except Exception:
+                continue
+        if not images:
+            return None
+        # Mode P (palette 256) : GIF impose 8 bits ; quantize par median-cut.
+        paletted = [im.quantize(colors=256, method=Image.MEDIANCUT) for im in images]
+        out = _io.BytesIO()
+        # Pillow : `duration` est en CENTIEMES de seconde (1/100 s), pas en ms.
+        # Pour une anim a 50 ms/frame on ecrit 5 (centiemes de seconde) ; sinon
+        # le GIF sort 10x trop lent (bug classique). Plancher 2 (20 ms).
+        duration = max(2, int(round(interval_ms / 10.0)))
+        paletted[0].save(
+            out,
+            format="GIF",
+            save_all=True,
+            append_images=paletted[1:],
+            duration=duration,
+            loop=0,
+            disposal=2,
+            optimize=False,
+        )
+        return base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception as error:
+        sys.stderr.write("[chaz-plots] Echec encodage GIF : " + str(error) + "\n")
+        return None
+
+
+def _ffmpeg_available():
+    """Detecte si ffmpeg est utilisable sur le PATH (rapide, 2s timeout)."""
+    try:
+        import subprocess
+        subprocess.run(
+            ["ffmpeg", "-version"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=True, timeout=2.0,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _encode_animation_mp4(frames_b64, interval_ms, fps):
+    """Frames PNG base64 -> MP4 base64 en passant par ffmpeg -image2pipe.
+    Le demuxer image2pipe de ffmpeg auto-detecte chaque frame comme PNG sur
+    stdin et produit un MP4 h264 (libx264) pix_fmt yuv420p, faststart Web.
+    Best-effort : None si ffmpeg absent ou en cas d'echec."""
+    if not frames_b64:
+        return None
+    if not _ffmpeg_available():
+        sys.stderr.write("[chaz-plots] ffmpeg introuvable sur PATH; MP4 non produit (activez chazPlots.includeMp4 seulement si ffmpeg est installe).\n")
+        return None
+    try:
+        import subprocess
+        # pad=ceil(iw/2)*2:ceil(ih/2)*2 : h264 exige des dimensions paires.
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "image2pipe", "-framerate", str(fps),
+            "-i", "-",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-movflags", "+faststart",
+            "-f", "mp4", "-",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        for b64 in frames_b64:
+            try:
+                proc.stdin.write(base64.b64decode(b64))
+            except Exception:
+                break
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            out_bytes = proc.stdout.read()
+        except Exception:
+            out_bytes = b""
+        try:
+            proc.wait(timeout=180)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            sys.stderr.write("[chaz-plots] ffmpeg timeout ; MP4 abandonne.\n")
+            return None
+        if proc.returncode != 0 or not out_bytes:
+            err = proc.stderr.read() if proc.stderr else b""
+            sys.stderr.write("[chaz-plots] ffmpeg a echoue (rc=" + str(proc.returncode) + ") : "
+                + (err.decode("utf-8", "replace")[:500] if err else "?") + "\n")
+            return None
+        return base64.b64encode(out_bytes).decode("ascii")
+    except Exception as error:
+        sys.stderr.write("[chaz-plots] Echec encodage MP4 : " + str(error) + "\n")
+        return None
+
+
 def _capture_animation(anim):
-    """Capture toutes les frames d'une animation. Retourne (frames, interval_ms)
-    ou (None, None) en cas d'echec."""
+    """Capture les frames d'une animation, plus eventuellement un GIF (par
+    defaut) et un MP4 (opt-in via chazPlots.includeMp4).
+    Retourne un dict {frames, interval, gif?, mp4?} ou None en cas d'echec."""
     interval = getattr(anim, "_interval", None) or 200
     try:
         interval = float(interval)
@@ -315,11 +445,11 @@ def _capture_animation(anim):
         anim.save("__spyder_plots__.png", writer=collector, dpi=_anim_dpi())
     except Exception as error:
         sys.stderr.write("[chaz-plots] Echec de capture de l'animation : " + str(error) + "\n")
-        return None, None
+        return None
 
     frames = collector.frames
     if not frames:
-        return None, None
+        return None
     cap = _anim_max_frames()
     if cap is not None and len(frames) > cap:
         frames = frames[:cap]
@@ -328,7 +458,12 @@ def _capture_animation(anim):
             + str(cap)
             + " frames (reglez chazPlots.animationMaxFrames, 0 = illimite).\n"
         )
-    return frames, interval
+    payload = {"frames": frames, "interval": interval}
+    if _include_gif():
+        payload["gif"] = _encode_animation_gif(frames, interval)
+    if _include_mp4():
+        payload["mp4"] = _encode_animation_mp4(frames, interval, fps)
+    return payload
 
 
 # ------------------------------------------------------------
@@ -547,15 +682,20 @@ class _BackendVSCodeSpyderPlots(_Backend):
             # --- 1) animation attachee a cette figure ? ---
             anims = _animations_for_figure(figure)
             if anims:
-                frames, interval = _capture_animation(anims[0])
-                if frames is not None:
-                    _send_figure({
+                captured = _capture_animation(anims[0])
+                if captured is not None and captured.get("frames") is not None:
+                    payload = {
                         "title": title,
-                        "frames": frames,
-                        "interval": interval,
+                        "frames": captured["frames"],
+                        "interval": captured["interval"],
                         "render": {"mode": "animation"},
                         "provenance": provenance,
-                    })
+                    }
+                    if captured.get("gif"):
+                        payload["gif"] = captured["gif"]
+                    if captured.get("mp4"):
+                        payload["mp4"] = captured["mp4"]
+                    _send_figure(payload)
                     continue
                 # echec de capture -> on retombe sur un rendu statique
 

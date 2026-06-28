@@ -18,6 +18,7 @@
 <script src="{{dataImportUri}}"></script>
 <script src="{{boardLayoutUri}}"></script>
 <script src="{{curveDigitizeUri}}"></script>
+<script src="{{curveFitUri}}"></script>
 <style>
   :root{
     color-scheme: light dark;
@@ -896,6 +897,35 @@
     <button class="compact le-guideshape-field" id="leDeleteGuide">Supprimer</button>
     <button class="compact" id="leClose">Fermer</button>
   </div>
+
+<div id="fitOverlay" class="overlay" style="display:none">
+  <div class="overlay-card">
+    <div class="overlay-head">Ajuster une courbe (régression polynomiale)<button id="fitCancel" title="Fermer">&#x2715;</button></div>
+    <p class="dig-help">Remplace une courbe relevée (ex. digitalisation) par sa courbe-modèle lisse, et donne son équation. Augmentez le degré pour suivre des formes plus complexes (R² proche de 1 = bon ajustement).</p>
+    <label style="font-size:13px"><input id="fitAuto" type="checkbox" checked> Modèle optimal automatique (gaussienne, exp, sinus, puissance, log, polynôme…)</label>
+    <label style="font-size:13px;margin-left:14px">Polynôme degré <input id="fitDegree" type="range" min="1" max="12" value="3" style="vertical-align:middle"> <span id="fitDegreeVal">3</span></label>
+    <div id="fitReadout" style="margin:10px 0;font-size:13px;font-family:monospace;white-space:pre-wrap;max-height:30vh;overflow:auto"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="fitCancel2">Annuler</button>
+      <button id="fitCode">Générer le code</button>
+      <button id="fitSuperpose">Superposer</button>
+      <button id="fitReplace" class="primary">Remplacer</button>
+    </div>
+  </div>
+</div>
+
+<div id="pdfPreviewOverlay" class="overlay" style="display:none">
+  <div class="overlay-card">
+    <div class="overlay-head">Aperçu du PDF<button id="pdfPreviewCancel" title="Annuler">&#x2715;</button></div>
+    <div style="text-align:center;max-height:65vh;overflow:auto;background:#fff;border:1px solid var(--sp-border);border-radius:6px;padding:8px">
+      <img id="pdfPreviewImg" style="max-width:100%;max-height:60vh" alt="aperçu">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+      <button id="pdfPreviewCancel2">Annuler</button>
+      <button id="pdfPreviewSave" class="primary">Enregistrer le PDF</button>
+    </div>
+  </div>
+</div>
 
 <div id="digitizeOverlay" class="overlay" style="display:none">
   <div class="overlay-card">
@@ -4618,6 +4648,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       { label: "Réinitialiser les axes", fn: function(){ modebarResetAxes(gd); } },
       { label: "Auto-échelle", fn: function(){ modebarAutoRange(gd); } },
       { label: "Ajouter courbe", keepOpen: true, fn: function(button){ openGuideLineMenu(gd, button.getBoundingClientRect()); } },
+      { label: "Ajuster (régression)", fn: function(){ openFitOverlay(gd); } },
       { label: "Copier l'encart (Ctrl+C)", fn: function(){ copyInsetAsVignette(gd); } },
       { label: "Coller un encart (Ctrl+V)", fn: function(){ pasteVignette(gd); } },
       { label: "Mesures", checked: !!gd._spMeasureArmed, fn: function(){ armMeasure(gd); } },
@@ -4655,6 +4686,111 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     menu.style.top = top + "px";
     menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
   }
+
+  // ----------------------------------------------------------
+  // Ajustement (regression polynomiale) : remplace une courbe relevee par sa
+  // courbe-modele lisse + donne l'equation. Utile surtout apres digitalisation.
+  // ----------------------------------------------------------
+  let fitState = null;
+  function fitCandidateTraces(el){
+    const data = el.data || [];
+    const out = [];
+    for (let i = 0; i < data.length; i++){
+      const t = data[i];
+      if (!t || t._spFit) continue;
+      if (t.type && t.type !== "scatter" && t.type !== "scattergl") continue;
+      if (!Array.isArray(t.x) || !Array.isArray(t.y)) continue;
+      const xs = [], ys = [];
+      for (let k = 0; k < t.x.length; k++){ const xv = Number(t.x[k]), yv = Number(t.y[k]); if (isFinite(xv) && isFinite(yv)){ xs.push(xv); ys.push(yv); } }
+      if (xs.length >= 3) out.push({ idx: i, name: t.name || ("courbe " + (i + 1)), xs: xs, ys: ys, color: (t.line && t.line.color) || (t.marker && t.marker.color) });
+    }
+    return out;
+  }
+  function openFitOverlay(el){
+    const cands = fitCandidateTraces(el);
+    if (!cands.length){ vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : aucune courbe ajustable sur cette figure." }); return; }
+    fitState = { el: el, cands: cands, fits: [] };
+    document.getElementById("fitOverlay").style.display = "flex";
+    recomputeFit();
+  }
+  function recomputeFit(){
+    if (!fitState) return;
+    const auto = document.getElementById("fitAuto").checked;
+    const deg = parseInt(document.getElementById("fitDegree").value, 10) || 3;
+    document.getElementById("fitDegreeVal").textContent = String(deg);
+    document.getElementById("fitDegree").disabled = auto;            // ordre auto -> slider inactif
+    fitState.fits = fitState.cands.map(function(c){
+      // auto : meilleur modele toutes familles (BIC). manuel : polynome du degre choisi.
+      let fit;
+      if (auto) { fit = CurveFit.bestModel(c.xs, c.ys, { maxDegree: 12 }); }
+      else { const p = CurveFit.polyfit(c.xs, c.ys, deg); fit = p ? CurveFit.unifyPoly(p) : null; }
+      return { c: c, fit: fit };
+    });
+    const lines = fitState.fits.map(function(f){
+      if (!f.fit) return f.c.name + " : ajustement impossible";
+      const lbl = f.fit.label ? f.fit.label + " — " : "";
+      return f.c.name + " : " + lbl + f.fit.equation + "   (R² = " + f.fit.r2.toFixed(4) + ")";
+    });
+    document.getElementById("fitReadout").textContent = lines.join("\n");
+  }
+  function fitSampleFor(f){
+    const x0 = Math.min.apply(null, f.c.xs), x1 = Math.max.apply(null, f.c.xs);
+    return CurveFit.sampleCurve(f.fit, x0, x1, 300);
+  }
+  function closeFitOverlay(){ document.getElementById("fitOverlay").style.display = "none"; fitState = null; }
+  function fitSuperpose(){
+    if (!fitState) return;
+    const el = fitState.el, adds = [];
+    fitState.fits.forEach(function(f){
+      if (!f.fit) return;
+      const pts = fitSampleFor(f);
+      adds.push({ type: "scatter", mode: "lines", x: pts.map(function(p){ return p.x; }), y: pts.map(function(p){ return p.y; }),
+        line: { color: f.c.color || undefined, dash: "dash", width: 2 }, name: "ajust. " + f.c.name, _spFit: true });
+    });
+    if (adds.length){
+      Promise.resolve(Plotly.addTraces(el, adds)).then(function(){ el._spBaseData = clone(el.data); persistRestoredFigure(el); }).catch(function(){});
+    }
+    closeFitOverlay();
+  }
+  // B5 : code matplotlib reproduisant l'EQUATION ajustee (pas un dump de points).
+  function fitGenerateCode(){
+    if (!fitState) return;
+    const r6 = function(v){ return Number(v.toPrecision(6)); };
+    const head = ["import numpy as np", "import matplotlib.pyplot as plt", ""];
+    const plots = []; let i = 0;
+    fitState.fits.forEach(function(f){
+      if (!f.fit || !f.fit.codeExpr) return;
+      i++;
+      const x0 = Math.min.apply(null, f.c.xs), x1 = Math.max.apply(null, f.c.xs);
+      head.push("# " + f.c.name + " : " + (f.fit.label ? f.fit.label + " — " : "") + f.fit.equation + "  (R² = " + f.fit.r2.toFixed(4) + ")");
+      head.push("x" + i + " = np.linspace(" + r6(x0) + ", " + r6(x1) + ", 300)");
+      head.push("y" + i + " = " + f.fit.codeExpr("x" + i));
+      plots.push("plt.plot(x" + i + ", y" + i + ", label=" + JSON.stringify(f.c.name) + ")");
+    });
+    if (!i){ vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : aucun ajustement a exporter." }); return; }
+    const code = head.concat([""], plots, ["plt.legend()", "plt.show()"]).join("\n");
+    vscodeApi.postMessage({ type: "generateModelCode", title: "ajustement", code: code });
+    closeFitOverlay();
+  }
+  function fitReplace(){
+    if (!fitState) return;
+    const el = fitState.el, ps = [];
+    fitState.fits.forEach(function(f){
+      if (!f.fit) return;
+      const pts = fitSampleFor(f);
+      ps.push(Plotly.restyle(el, { x: [pts.map(function(p){ return p.x; })], y: [pts.map(function(p){ return p.y; })], mode: ["lines"] }, [f.c.idx]));
+    });
+    Promise.all(ps).then(function(){ el._spBaseData = clone(el.data); persistRestoredFigure(el); }).catch(function(){});
+    closeFitOverlay();
+  }
+  (function(){
+    const deg = document.getElementById("fitDegree");
+    if (deg) deg.addEventListener("input", recomputeFit);
+    const auto = document.getElementById("fitAuto");
+    if (auto) auto.addEventListener("change", recomputeFit);
+    [["fitSuperpose", fitSuperpose], ["fitReplace", fitReplace], ["fitCode", fitGenerateCode], ["fitCancel", closeFitOverlay], ["fitCancel2", closeFitOverlay]]
+      .forEach(function(p){ const e = document.getElementById(p[0]); if (e) e.addEventListener("click", p[1]); });
+  })();
 
   // ----------------------------------------------------------
   // Annulation (Ctrl+Z) : pile de snapshots par figure.
@@ -5172,6 +5308,30 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     });
 
     const menuButtons = [];
+    // GIF / MP4 d'animation : visibles UNIQUEMENT si le backend a
+    // encode fig.gif / fig.mp4 (plt.show() les inclut selon les
+    // reglages chazPlots.includeGif / includeMp4). extension.js route
+    // vers saveAnimation, qui ecrit le fichier (.gif / .mp4) sur disque.
+    if (fig.frames && fig.frames.length && fig.gif){
+      const bGif = document.createElement("button");
+      bGif.className = "textbtn";
+      bGif.textContent = "Enregistrer GIF";
+      bGif.title = "Enregistrer l'animation au format GIF (PillowWriter, encode cote backend a plt.show())";
+      bGif.addEventListener("click", function(){
+        vscodeApi.postMessage({ type: "saveAnimation", id: fig.id, format: "gif" });
+      });
+      menuButtons.push(bGif);
+    }
+    if (fig.frames && fig.frames.length && fig.mp4){
+      const bMp4 = document.createElement("button");
+      bMp4.className = "textbtn";
+      bMp4.textContent = "Enregistrer MP4";
+      bMp4.title = "Enregistrer l'animation au format MP4 (ffmpeg + libx264 ; requiert ffmpeg sur PATH)";
+      bMp4.addEventListener("click", function(){
+        vscodeApi.postMessage({ type: "saveAnimation", id: fig.id, format: "mp4" });
+      });
+      menuButtons.push(bMp4);
+    }
     if (fig.pgf) {
       const bPgf = document.createElement("button");
       bPgf.className = "textbtn";
@@ -5977,6 +6137,33 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     });
   }
 
+  // Apercu PDF : rend un PNG leger de l'element, l'affiche dans la modale, et
+  // n'execute l'export reel (onConfirm) qu'apres validation. Annuler -> on signale
+  // un export annule (l'extension nettoie en silence).
+  let pdfPreviewState = null;
+  function showPdfPreview(el, requestId, onConfirm){
+    pdfPreviewState = { requestId: requestId, onConfirm: onConfirm };
+    const ov = document.getElementById("pdfPreviewOverlay");
+    const img = document.getElementById("pdfPreviewImg");
+    const dims = (typeof exportDims === "function") ? exportDims(el) : { width: el.clientWidth, height: el.clientHeight };
+    Promise.resolve(Plotly.toImage(el, { format: "png", width: dims.width, height: dims.height, scale: 1 }))
+      .then(function(url){ img.src = url; ov.style.display = "flex"; })
+      .catch(function(){ pdfPreviewState = null; onConfirm(); }); // apercu impossible -> on exporte direct
+  }
+  (function(){
+    function confirm(){
+      document.getElementById("pdfPreviewOverlay").style.display = "none";
+      if (pdfPreviewState){ const f = pdfPreviewState.onConfirm; pdfPreviewState = null; f(); }
+    }
+    function cancel(){
+      document.getElementById("pdfPreviewOverlay").style.display = "none";
+      if (pdfPreviewState){ postExportResult(pdfPreviewState.requestId, false, null, "__cancel__"); pdfPreviewState = null; }
+    }
+    document.getElementById("pdfPreviewSave").addEventListener("click", confirm);
+    document.getElementById("pdfPreviewCancel").addEventListener("click", cancel);
+    document.getElementById("pdfPreviewCancel2").addEventListener("click", cancel);
+  })();
+
   // Charge un data URL image dans un <canvas> et renvoie ses pixels RGBA.
   function pixelsFromImageUrl(url){
     return new Promise(function(resolve, reject){
@@ -6394,16 +6581,19 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     // PDF : figure sans encart et hors comparaison -> PDF matplotlib natif
     // (signal useNative). Sinon -> PDF raster genere ici (encart/erreurs inclus).
     if (options.format === "pdf"){
-      // PDF natif vectoriel seulement si l'extension l'autorise (figure non
-      // editee), sans encart, ET sans courbe masquee (le PDF natif matplotlib
-      // remontre toutes les courbes). Sinon -> PDF raster de l'element vivant.
-      if (!isCompare && !el._spHasInset && options.allowNative !== false && !hasHidden){
-        postExportResult(msg.requestId, true, null, null, true);
-        return;
-      }
-      withExportLegend(el, function(){ return buildRasterPdfDataUrl(el); })
-        .then(function(dataUrl){ postExportResult(msg.requestId, true, dataUrl, null); })
-        .catch(function(err){ postExportResult(msg.requestId, false, null, String(err)); });
+      // L'export reel (natif vectoriel si l'extension l'autorise, sinon raster).
+      const doPdfExport = function(){
+        if (!isCompare && !el._spHasInset && options.allowNative !== false && !hasHidden){
+          postExportResult(msg.requestId, true, null, null, true);
+          return;
+        }
+        withExportLegend(el, function(){ return buildRasterPdfDataUrl(el); })
+          .then(function(dataUrl){ postExportResult(msg.requestId, true, dataUrl, null); })
+          .catch(function(err){ postExportResult(msg.requestId, false, null, String(err)); });
+      };
+      // Apercu avant ecriture (sauf export groupe).
+      if (options.preview === false || msg.batch){ doPdfExport(); }
+      else { showPdfPreview(el, msg.requestId, doPdfExport); }
       return;
     }
 
@@ -6997,6 +7187,45 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       } else {
         window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
       }
+    } else if (msg.type === "update"){
+      // Live update opt-in (chazPlots.replaceOnSameProvenance ON) :
+      // extension.js mute la figure en place (meme id). On preserve
+      // le shell DOM (selection compare, zoom Plotly, classe
+      // .filtered) et on rafraichit le contenu. Plotly.react avec
+      // uirevision="persisted" preserve le zoom utilisateur meme
+      // quand les data changent.
+      figStore[msg.fig.id] = msg.fig;
+      const card = document.getElementById("fig-" + msg.fig.id);
+      if (card){
+        const plotEl = card.querySelector(".plotwrap > div");
+        if (plotEl && msg.fig.plotly){
+          const layout = Object.assign({}, msg.fig.plotly.layout || {}, { uirevision: "persisted" });
+          try {
+            const cfg = plotEl._spConfig || { displaylogo: false };
+            Plotly.react(plotEl, msg.fig.plotly.data || [], layout, cfg);
+          } catch (e){
+            const parent = card.parentElement;
+            if (parent){ parent.replaceChild(makeCard(msg.fig), card); }
+          }
+        } else if (msg.fig.frames && msg.fig.frames.length){
+          const oldPlayer = card.querySelector(".player");
+          if (oldPlayer && oldPlayer.parentNode){
+            const player = createPlayer(msg.fig, false);
+            oldPlayer.parentNode.replaceChild(player.root, oldPlayer);
+            card._player = player;
+          } else {
+            const parent = card.parentElement;
+            if (parent){ parent.replaceChild(makeCard(msg.fig), card); }
+          }
+        } else if (msg.fig.svg || msg.fig.png){
+          const oldImg = card.querySelector(".imgwrap img");
+          if (oldImg){
+            if (msg.fig.svg){ oldImg.src = "data:image/svg+xml;base64," + msg.fig.svg; }
+            else if (msg.fig.png){ oldImg.src = "data:image/png;base64," + msg.fig.png; }
+          }
+        }
+        applySearchFilter();
+      }
     } else if (msg.type === "remove"){
       removeCard(msg.id);
       n = Math.max(0, n - 1); refreshCount();
@@ -7092,9 +7321,18 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       document.getElementById("digYlog").checked = false;
       digSetMode("none"); updateCalibStatus();
       const clusters = CurveDigitize.clusterCurveColors(img, digState.box);
-      digState.curves = CurveDigitize.extractCurves(clusters, digState.box);
+      const allCurves = CurveDigitize.extractCurves(clusters, digState.box);
+      // Courbes AMBIGUES (croisement/recouvrement) : on ne les affiche PAS telles
+      // qu'extraites — l'auto n'est pas fiable la. On force l'utilisateur a les
+      // tracer a la Brosse ou au Manuel (l'info de quelle branche suivre, l'auto
+      // ne peut pas la deviner).
+      digState.curves = allCurves.filter(function (c) { return !(c.ambiguous && c.ambiguous.length); });
+      const problematic = allCurves.length - digState.curves.length;
       digState.curves.forEach(function (c) { c.raw = c.points; digFinalize(c); });
       renderDigCurveList();
+      if (problematic) {
+        vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : " + problematic + " courbe(s) ambiguë(s) (croisement/recouvrement) non affichée(s) — tracez-les avec « Brosse » ou « Manuel »." });
+      }
       ov.style.display = "flex";
     } catch (err) {
       vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : image illisible ou sans dimensions." });

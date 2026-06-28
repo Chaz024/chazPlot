@@ -238,21 +238,25 @@
     if (run > 0) onRuns.push(run);
     const coverage = present / span;
     const avgHeight = totalHeight / present;
+    const nRuns = onRuns.length;
+    const avgRun = nRuns ? present / nRuns : 0;
+    const avgGap = (span + 1 - present) / Math.max(1, nRuns - 1);
     // Markers = pastilles : amas hauts ET CLAIRSEMES (plus de trou que d'encre).
-    // L'epaisseur seule ne suffit pas — un trait EPAIS troue n'est pas des points.
-    // Critere : hauteur >= 3, faible couverture, et trous moyens > plages moyennes.
-    const avgRun = onRuns.length ? present / onRuns.length : 0;
-    const nGaps = Math.max(1, onRuns.length - 1);
-    const avgGap = (span + 1 - present) / nGaps;
     if (avgHeight >= 3 && coverage < 0.5 && avgGap > avgRun) return { style: "markers" };
-    if (coverage >= 0.85) return { style: "solid" };
-    if (coverage >= 0.45) {
-      let nLong = 0, nShort = 0;
-      for (let i = 0; i < onRuns.length; i++) { if (onRuns[i] >= 3) nLong++; else if (onRuns[i] === 1) nShort++; }
-      if (nLong >= 2 && nShort >= nLong * 0.6) return { style: "dashdot" };
-      return { style: "dashed" };
+    // Solid : continu (1 a 3 plages). Une couverture haute NE suffit PAS : sur une
+    // image reelle, des tirets epais a petits trous (anti-aliasing) ont une
+    // couverture ~0.9 mais DES DIZAINES de plages -> on exige peu de plages.
+    if (coverage >= 0.85 && nRuns <= 3) return { style: "solid" };
+    // Ligne brisee. Dashdot = BIMODALITE des longueurs de plage (longs tirets
+    // alternant avec points courts), independant de l'echelle : Q3 >> Q1.
+    if (nRuns >= 4) {
+      const s = onRuns.slice().sort(function (a, b) { return a - b; });
+      const q1 = s[Math.floor(s.length * 0.25)], q3 = s[Math.floor(s.length * 0.75)];
+      if (q1 >= 1 && q3 >= q1 * 2.5) return { style: "dashdot" };
     }
-    return { style: "dotted" };
+    // dotted vs dashed : longueur de plage relative a l'epaisseur du trait
+    if (avgRun <= avgHeight * 4) return { style: "dotted" };
+    return { style: "dashed" };
   }
 
   // Densifie une courbe a trous (tirets, pointilles) en interpolant lineairement
@@ -376,7 +380,9 @@
       }
       return {
         color: c.color,
-        style: detectLineStyle(pixels, box).style,
+        // style sur les pixels D'ORIGINE : dropSwatch peut retirer les points
+        // courts d'un tiret-point (plus petits que 15% d'un tiret) et fausser le style.
+        style: detectLineStyle(c.pixels, box).style,
         pixels: pixels,
         points: points,
         ambiguous: merged

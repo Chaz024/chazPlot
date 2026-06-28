@@ -13,7 +13,7 @@ const placeholders = [
   "{{measureMathUri}}", "{{csvExportUri}}", "{{compareUtilUri}}",
   "{{bundleMetaUri}}", "{{figureFilterUri}}", "{{pdfExportUri}}",
   "{{legendEditUri}}", "{{autoscaleUri}}", "{{dataImportUri}}", "{{boardLayoutUri}}",
-  "{{curveDigitizeUri}}",
+  "{{curveDigitizeUri}}", "{{curveFitUri}}",
   "{{customPlotStylesJson}}",
 ];
 const requiredIds = [

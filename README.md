@@ -92,6 +92,18 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
 - **Bundle publication** : bouton « Bundle » → un dossier prêt pour Overleaf
   contenant `figure.png`, `figure.svg`, **`figure.pdf`**, `metadata.json` et
   `figure.tex` (`\includegraphics` sans extension : pdflatex prend le PDF).
+- **Export GIF / MP4 des animations** : le backend pré-encode un GIF (via
+  PillowWriter, par défaut) et optionnellement un MP4 (via ffmpeg + libx264
+  image2pipe, opt-in via `chazPlots.includeMp4`). Les cartes d'animation
+  exposent des boutons « Enregistrer GIF » et « Enregistrer MP4 » quand
+  l'asset est disponible. **MP4 nécessite ffmpeg** sur le PATH (vérifié à
+  l'exécution ; un message d'erreur clair s'affiche sinon).
+- **Live update opt-in** : nouveau réglage `chazPlots.replaceOnSameProvenance`
+  (défaut **OFF**). Quand il est activé, un rerun du même script au même
+  `plt.show()` (et même titre) met à jour la carte existante au lieu d'en
+  empiler une nouvelle — vos tags, ts et id sont préservés. **Pour vos études
+  paramétriques en boucle `for`, laissez ce réglage OFF** (et utilisez
+  `plt.title(f"p={p}")` pour des titres dynamiques, sécurité supplémentaire).
 - **Comparaison** : sélection de plusieurs graphes pour les superposer ou les
   afficher côte à côte.
   - **Legendes explicites** : en superposition, les traces sont prefixees par le
@@ -170,6 +182,15 @@ Ouvrez le dossier dans VS Code et appuyez sur `F5` (« Run Extension »).
   les PNG/SVG exportes pour permettre **Image -> code**.
 - `chazPlots.embedFigureDataMaxKB` (defaut `2048`) - taille maximale des donnees
   embarquees dans une image.
+- `chazPlots.includeGif` (defaut `true`) - pre-encoder un GIF en plus des
+  frames PNG pour chaque animation (cout negligeable, ~150-300 ms).
+- `chazPlots.includeMp4` (defaut `false`) - pre-encoder un MP4 (ffmpeg
+  + libx264). ATTENTION : bloque plt.show() plusieurs secondes par animation
+  ; n'activez que si ffmpeg est installe.
+- `chazPlots.replaceOnSameProvenance` (defaut `false`) - opt-in : remplace la
+  carte en place quand le rerun produit la meme figure (meme
+  script + meme ligne + meme titre). OFF pour preserver les etudes
+  paramétriques en boucle.
 - `chazPlots.persistFigures` (défaut `true`) — conserver les figures entre
   sessions. Désactivez pour un mode ultra rapide sans écriture disque.
 - `chazPlots.autoReveal` (défaut `true`) — afficher le panneau à chaque figure.
@@ -412,7 +433,8 @@ node test/test_figure_codec.js  # donnees embarquees dans PNG/SVG
 node test/test_plotly_to_py.js  # regeneration de code matplotlib
 node test/test_board_layout.js  # composition de planche multi-panneaux
 node test/check_panel_html.js    # garde-fou structurel du webview
-node --check extension.js storage.js media/legend_edit.js
+node test/test_replace_policy.js # politique de remplacement live update
+node --check extension.js storage.js media/legend_edit.js media/replace_policy.js
 ```
 
 ## Nouveautes v0.13.0

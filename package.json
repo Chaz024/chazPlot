@@ -111,6 +111,26 @@
           "default": 2048,
           "minimum": 0,
           "description": "Taille maximale (en Ko compressés) des données intégrées à une image auto-portée. Au-delà, l'image est enregistrée sans données embarquées."
+        },
+        "chazPlots.includeGif": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pré-encoder un GIF (PillowWriter) en plus des frames PNG pour chaque animation. Le bouton « Enregistrer GIF » devient disponible sur les cartes d'animation. Coût négligeable (~150-300 ms par animation)."
+        },
+        "chazPlots.includeMp4": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pré-encoder un MP4 (ffmpeg + libx264, via image2pipe) en plus des frames PNG. ATTENTION : bloque plt.show() plusieurs secondes par animation selon la longueur. Activez seulement si ffmpeg est installé sur votre machine (vérifié à l'exécution)."
+        },
+        "chazPlots.refreshIdenticalReruns": {
+          "type": "boolean",
+          "default": true,
+          "description": "Quand un script est relancé sans changement, rafraîchir les cartes identiques au lieu d'empiler des doublons (comparaison par signature du rendu : même script+ligne ET même contenu). Dès qu'un paramètre change le rendu, une NOUVELLE carte apparaît (l'ancienne est conservée pour comparer/superposer). Désactivez pour toujours empiler. Note : un plot non déterministe (np.random sans seed) donne un rendu différent à chaque run → il s'empilera."
+        },
+        "chazPlots.replaceOnSameProvenance": {
+          "type": "boolean",
+          "default": false,
+          "description": "Live update opt-in : si une figure de même provenance (script + ligne du plt.show()) et même titre existe déjà, mettre à jour son contenu au lieu d'empiler une nouvelle carte. Préserve id, tags, ts et provenance. Pour vos études paramétriques en boucle for → laissez ce réglage à OFF (défaut). Activez-le uniquement quand vous voulez que le rerun du même script rafraichisse la carte. Pour une boucle paramétrique, utilisez des titres dynamiques (plt.title(f'p={p}')) pour que chaque param garde sa carte."
         }
       }
     }
