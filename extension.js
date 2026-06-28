@@ -640,14 +640,10 @@ function extractEmbeddedFigure(buf, name) {
 // Image deposee : si elle porte des donnees Chaz Plots, genere un script
 // matplotlib qui reproduit la courbe (a partir des donnees embarquees, jamais du
 // code source) et l'ouvre dans un nouvel editeur Python. Sinon, message discret.
-function generateCodeFromImage(buf, name) {
-  const payload = extractEmbeddedFigure(buf, name);
-  if (!payload) {
-    vscode.window.showInformationMessage(
-      "Chaz Plots : « " + (name || "cette image") + " » ne contient pas de donnees Chaz Plots."
-    );
-    return;
-  }
+// Prepare le code matplotlib reproduisant la figure embarquee SANS l'afficher :
+// le document est cree en memoire et une notification discrete propose de
+// l'ouvrir a la demande (rien ne s'affiche/recouvre tant qu'on ne clique pas).
+function openCodeFromPayload(payload) {
   let code;
   try {
     code = PlotlyToPy.toMatplotlib({ title: payload.title || "", plotly: payload.plotly });
@@ -659,10 +655,36 @@ function generateCodeFromImage(buf, name) {
     + (payload.title ? " « " + payload.title + " »" : "")
     + "\n# (donnees embarquees dans l'image ; reproduit la courbe).\n\n";
   vscode.workspace.openTextDocument({ language: "python", content: header + code })
-    .then(function (doc) { return vscode.window.showTextDocument(doc); })
-    .then(undefined, function (err) {
-      vscode.window.showErrorMessage("Chaz Plots : impossible d'ouvrir l'editeur (" + String(err) + ")");
+    .then(function (doc) {
+      vscode.window.showInformationMessage("Chaz Plots : code matplotlib genere.", "Ouvrir le code")
+        .then(function (choice) { if (choice === "Ouvrir le code") { vscode.window.showTextDocument(doc); } });
+    }, function (err) {
+      vscode.window.showErrorMessage("Chaz Plots : echec de la generation du code (" + String(err) + ")");
     });
+}
+
+// Image deposee/choisie. requestId present (glisser ou bouton du webview) : on
+// renvoie la spec au webview qui decide superposition (depot sur une figure) ou
+// nouvelle figure (depot sur le vide), comme pour le CSV. Le CODE est ouvert en
+// arriere-plan. Sans donnees Chaz Plots : digitalisation (si demandee) ou message.
+function handleImportImage(buf, name, requestId, digitizeFallback) {
+  const payload = extractEmbeddedFigure(buf, name);
+  if (payload) {
+    openCodeFromPayload(payload);
+    if (requestId != null) {
+      postToWebview({ type: "imageSpec", requestId: requestId, title: payload.title || "", plotly: payload.plotly });
+    } else {
+      createFigureFromData(payload.title, payload.plotly);   // pas de requestId : trace direct
+    }
+    return;
+  }
+  if (requestId != null && digitizeFallback) {
+    postToWebview({ type: "imageNoEmbed", requestId: requestId, name: name });
+  } else {
+    vscode.window.showInformationMessage(
+      "Chaz Plots : « " + (name || "cette image") + " » ne contient pas de donnees Chaz Plots."
+    );
+  }
 }
 
 async function plotlyExportOptions(fig) {
@@ -1094,19 +1116,13 @@ function setupPanel(p) {
     else if (msg.type === "importImageData") {
       try {
         const buf = Buffer.from(msg.b64 || "", "base64");
-        // Glisser-deposer (requestId present) : image SANS donnees Chaz Plots ->
-        // on bascule vers la digitalisation cote webview plutot qu'un message sec.
-        if (msg.requestId != null && !extractEmbeddedFigure(buf, msg.name)) {
-          postToWebview({ type: "imageNoEmbed", requestId: msg.requestId, name: msg.name });
-        } else {
-          generateCodeFromImage(buf, msg.name);
-        }
+        handleImportImage(buf, msg.name, msg.requestId, msg.digitizeFallback);
       } catch (e) { /* image illisible */ }
     }
     else if (msg.type === "importImageUri") {
       try {
         const fsPath = vscode.Uri.parse(msg.uri).fsPath;
-        generateCodeFromImage(fs.readFileSync(fsPath), path.basename(fsPath));
+        handleImportImage(fs.readFileSync(fsPath), path.basename(fsPath), msg.requestId, msg.digitizeFallback);
       } catch (e) { /* lecture impossible */ }
     }
     else if (msg.type === "createFigureFromData") { createFigureFromData(msg.title, msg.plotly); }

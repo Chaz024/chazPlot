@@ -492,10 +492,11 @@
     background:var(--vscode-input-background); color:var(--vscode-input-foreground);
   }
   .data-import-dialog .di-ychecks{
-    display:flex; flex-wrap:wrap; gap:6px 14px; max-height:150px; overflow:auto;
+    display:flex; flex-direction:column; gap:6px; max-height:170px; overflow:auto;
     padding:6px 8px; border:1px solid var(--sp-border); border-radius:6px;
   }
   .data-import-dialog .di-ycheck{ display:flex; align-items:center; gap:4px; font-size:12px; color:var(--sp-text); }
+  .data-import-dialog .di-rowx{ margin-left:auto; font-size:11px; padding:1px 4px; }
   .data-import-dialog .di-ycheck.di-disabled{ opacity:.4; }
   .data-import-dialog .di-btns{ display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
   .data-import-dialog .textbtn.primary{ background:var(--sp-accent); color:#fff; border-color:var(--sp-accent); }
@@ -741,7 +742,7 @@
         <div class="menu-section" aria-hidden="true">Importer</div>
         <button id="importCsv" title="Importer un fichier .csv/.dat comme nouveau graphe (ou glisser-deposer sur un graphe pour superposer)"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4"/></svg></span><span>Importer CSV/DAT</span></button>
         <div class="menu-section" aria-hidden="true">Creer / Coller</div>
-        <button id="importImage" title="Generer le code matplotlib qui reproduit la courbe, depuis une image PNG/SVG auto-portee (exportee par Chaz Plots)"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v8H3zM5 10l2-2 1.5 1.5L10.5 7 13 10"/></svg></span><span>Image &rarr; code</span></button>
+        <button id="importImage" title="Depuis une image PNG/SVG auto-portee (exportee par Chaz Plots) : retrace la figure dans le panneau ET genere le code matplotlib qui la reproduit"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v8H3zM5 10l2-2 1.5 1.5L10.5 7 13 10"/></svg></span><span>Image &rarr; graphe + code</span></button>
         <button id="digitizeImage" title="Extraire les points d'une figure depuis un PNG/SVG quelconque (non genere par Chaz Plots) : detection auto des courbes par couleur/style, calibration des axes, sortie figure/CSV/code"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v8H3zM5 8l2 2 4-4"/></svg></span><span>Digitaliser</span></button>
         <button id="pasteFig" title="Coller ici la figure copiee (depuis cette fenetre ou une autre)"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5h4M5 5h6v8H5zM4 6.5H3v6h1"/></svg></span><span>Coller une figure</span></button>
         <div class="menu-section" aria-hidden="true">Organiser</div>
@@ -767,7 +768,7 @@
       <li>Cochez plusieurs graphes pour les comparer cote a cote ou en superposition.</li>
       <li>Utilisez Enregistrer ou Copier directement depuis chaque carte.</li>
       <li>Importez un fichier <code>.csv</code>/<code>.dat</code> via le bouton <strong>Importer CSV</strong> (barre d'outils = nouveau graphe ; menu d'un graphe = superposer). Le glisser-deposer marche aussi, mais maintenez <strong>Shift</strong> (sinon VS Code ouvre le fichier dans l'editeur).</li>
-      <li>Une image <code>.png</code>/<code>.svg</code> exportee par Chaz Plots est <strong>auto-portee</strong> : reconstruisez le <strong>code matplotlib</strong> qui reproduit la courbe via le bouton <strong>Image &rarr; code</strong> (ou en deposant l'image avec <strong>Shift</strong>).</li>
+      <li>Une image <code>.png</code>/<code>.svg</code> exportee par Chaz Plots est <strong>auto-portee</strong> : le bouton <strong>Image &rarr; graphe + code</strong> (ou en deposant l'image avec <strong>Shift</strong>) <strong>retrace la figure</strong> dans le panneau <em>et</em> prepare le <strong>code matplotlib</strong> qui la reproduit (ouvrable a la demande via une notification, sans recouvrir ta vue).</li>
       <li><strong>Digitaliser</strong> une figure quelconque (capture, scan…) : glissez l'image dans le panneau avec <strong>Shift</strong> &mdash; si elle ne contient pas de donnees Chaz Plots, l'outil de digitalisation s'ouvre. Plusieurs images a la fois sont traitees a la suite.</li>
     </ul>
   </div>
@@ -5171,14 +5172,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         openLegendBoxEditor(el);
       }, true);
     }
-    if (coordsEl && el.on){
-      el.on("plotly_hover", function(ev){
-        if (el._spInsetArmed){ return; }   // garde le message du mode encart
-        const pt = ev && ev.points && ev.points[0];
-        if (pt){ coordsEl.textContent = hoverText(pt); }
-      });
-      el.on("plotly_unhover", function(){ if (!el._spInsetArmed){ coordsEl.textContent = ""; } });
-    }
+    // (Affichage des coordonnees au survol retire : la zone .coords ne sert plus
+    // qu'aux messages de mode — encart, edition de legende, annotation, auto-Y.)
     // Vignettes persistees (encarts colles d'un autre graphe) : les axes/traces/
     // bordure sont deja bakees dans fig.plotly (donc rendues par newPlot). On
     // recharge le registre et on (re)monte les overlays draggables.
@@ -6776,7 +6771,22 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     });
   }
 
+  // Graphe Plotly cible quand un overlay (comparaison / superposition / erreur)
+  // est ouvert : le panneau sous le curseur en « cote a cote », sinon l'unique
+  // graphe superpose. Renvoie {el} ou null (mode liste classique).
+  function activeOverlayTarget(eventTargetEl){
+    if (!compareOverlay.classList.contains("show")){ return null; }
+    let el = null;
+    if (eventTargetEl && eventTargetEl.closest){ el = eventTargetEl.closest(".compare-plot"); }
+    if (!el){ el = currentComparePlotEl(); }
+    return el ? { el: el } : null;
+  }
+
   function dropTargetFor(e){
+    // En mode comparaison, cibler le graphe de comparaison (et non une carte
+    // cachee derriere l'overlay) -> l'import CSV marche aussi en comparaison.
+    const ov = activeOverlayTarget(e.target);
+    if (ov){ return ov; }
     const card = e.target && e.target.closest ? e.target.closest(".card") : null;
     if (card && card.id.indexOf("fig-") === 0){ return card.id.slice(4); }
     return "new";
@@ -6789,24 +6799,35 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
              marker: { size: 6 }, hoverinfo: "none", _spImported: true };
   }
 
-  // Superpose les series importees sur une figure Plotly existante (live + persiste
-  // + annulable). Repli sur une nouvelle figure si la cible n'est pas une figure Plotly.
-  function applyOverlay(id, series){
-    const el = document.getElementById("plot-" + id);
+  // Superpose les series importees sur un graphe Plotly DONNE (element DOM).
+  // Marche pour une carte de la liste, un panneau de comparaison cote a cote, ou
+  // le graphe superpose (avec ou sans mode erreur). La persistance n'a lieu que
+  // pour une VRAIE figure de l'historique (id present dans figStore) ; sur une
+  // vue de comparaison synthetique, l'ajout reste live (et annulable). Repli sur
+  // une nouvelle figure si la cible n'est pas une figure Plotly.
+  function applyOverlayToEl(el, series){
     if (!el || !el._spFig || !el._spFig.plotly || typeof Plotly === "undefined"){
       applyNewFigure(series, null);
       return;
     }
+    const fid = el._spFig.id;
+    const persist = fid != null && figStore[fid];
     series.forEach(function(s){
       const t = importedTrace(s);
       el._spFig.plotly.data.push(clone(t));        // copie canonique du webview
-      el._spBaseData.push(clone(t));               // base re-utilisee (undo, encart)
+      if (el._spBaseData){ el._spBaseData.push(clone(t)); }   // base (undo, encart)
       Plotly.addTraces(el, clone(t));
-      vscodeApi.postMessage({ type: "appendFigureTrace", id: el._spFig.id, trace: clone(t) });
+      if (persist){ vscodeApi.postMessage({ type: "appendFigureTrace", id: fid, trace: clone(t) }); }
     });
     scheduleUndoRecord(el);
     vscodeApi.postMessage({ type: "notify", level: "info",
-      text: "Chaz Plots : " + series.length + " serie(s) superposee(s) (Ctrl+Z pour annuler)." });
+      text: "Chaz Plots : " + series.length + " serie(s) superposee(s)"
+        + (persist ? " (Ctrl+Z pour annuler)." : " sur la comparaison.") });
+  }
+
+  // Compat : superposition par id de figure (liste).
+  function applyOverlay(id, series){
+    applyOverlayToEl(document.getElementById("plot-" + id), series);
   }
 
   // Cree une nouvelle figure a partir des series importees (depot sur zone vide).
@@ -6838,7 +6859,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
 
       const sub = document.createElement("div");
       sub.className = "di-sub";
-      sub.textContent = (target === "new" ? "Nouveau graphe" : "Superposer sur ce graphe")
+      sub.textContent = (target === "new" ? "Nouveau graphe"
+                          : (target && target.el ? "Superposer sur la comparaison" : "Superposer sur ce graphe"))
         + " · " + cols.length + " colonne(s), " + parsed.rowCount + " ligne(s)"
         + (parsed.hasHeader ? "" : " · sans en-tete");
       dlg.appendChild(sub);
@@ -6868,6 +6890,30 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       xWrap.appendChild(xSel);
       dlg.appendChild(xWrap);
 
+      // Mode « paires » : un X propre a chaque Y (donnees X1,Y1,X2,Y2,...).
+      const pairsWrap = document.createElement("label");
+      pairsWrap.className = "di-ycheck";
+      const pairsCb = document.createElement("input");
+      pairsCb.type = "checkbox";
+      pairsWrap.appendChild(pairsCb);
+      pairsWrap.appendChild(document.createTextNode(" Chaque Y a sa propre colonne X (donnees en paires)"));
+      dlg.appendChild(pairsWrap);
+
+      // Construit un <select> de colonne X (option indice + chaque colonne).
+      function makeXSelect(defVal){
+        const s = document.createElement("select");
+        const oi = document.createElement("option");
+        oi.value = "-1"; oi.textContent = "(indice)";
+        s.appendChild(oi);
+        cols.forEach(function(c, i){
+          const o = document.createElement("option");
+          o.value = String(i); o.textContent = c.name;
+          s.appendChild(o);
+        });
+        s.value = String(defVal);
+        return s;
+      }
+
       const yWrap = document.createElement("div");
       yWrap.className = "di-field";
       const yLabel = document.createElement("div");
@@ -6882,14 +6928,22 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         cb.type = "checkbox"; cb.value = String(i);
         cb.checked = (i !== 0);   // auto : toutes sauf X
         lab.appendChild(cb);
-        lab.appendChild(document.createTextNode(" " + c.name));
+        lab.appendChild(document.createTextNode(" " + c.name + " "));
+        // selecteur X propre a cette ligne (visible en mode paires)
+        const rowX = makeXSelect(parseInt(xSel.value, 10));
+        rowX.className = "di-rowx";
+        rowX.style.display = "none";
+        lab.appendChild(rowX);
         yBox.appendChild(lab);
-        return { cb: cb, lab: lab, index: i };
+        return { cb: cb, lab: lab, index: i, rowX: rowX };
       });
       yWrap.appendChild(yBox);
       dlg.appendChild(yWrap);
 
+      function pairsMode(){ return pairsCb.checked; }
+
       function syncXExclusion(){
+        if (pairsMode()){ return; }
         const xi = parseInt(xSel.value, 10);
         checks.forEach(function(ch){
           const isX = ch.index === xi;
@@ -6898,8 +6952,41 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
           if (isX){ ch.cb.checked = false; }
         });
       }
-      xSel.addEventListener("change", syncXExclusion);
+      function syncPairs(){
+        const on = pairsMode();
+        // en mode paires : selecteur X par ligne, pas d'exclusion globale
+        checks.forEach(function(ch){ ch.rowX.style.display = on ? "" : "none"; });
+        xWrap.style.opacity = on ? ".5" : "";
+        if (on){
+          checks.forEach(function(ch){ ch.lab.classList.remove("di-disabled"); ch.cb.disabled = false; });
+        } else {
+          syncXExclusion();
+        }
+      }
+      xSel.addEventListener("change", function(){
+        // garde les selecteurs de ligne synchro tant que l'utilisateur ne les a pas touches
+        checks.forEach(function(ch){ if (!ch.rowX.dataset.touched){ ch.rowX.value = xSel.value; } });
+        syncXExclusion();
+      });
+      checks.forEach(function(ch){ ch.rowX.addEventListener("change", function(){ ch.rowX.dataset.touched = "1"; }); });
+      pairsCb.addEventListener("change", syncPairs);
       syncXExclusion();
+
+      // Format « large groupe » de Chaz Plots detecte -> pre-remplit les paires.
+      if (parsed.pairs && parsed.pairs.yIndices.length){
+        pairsCb.checked = true;
+        checks.forEach(function(ch){ ch.cb.checked = false; });
+        parsed.pairs.yIndices.forEach(function(yi, k){
+          const ch = checks[yi];
+          if (ch){
+            ch.cb.checked = true;
+            ch.rowX.value = String(parsed.pairs.xIndices[k]);
+            ch.rowX.dataset.touched = "1";
+          }
+        });
+        syncPairs();
+        sub.textContent += " · format Chaz Plots (paires X/Y) detecte";
+      }
 
       const btns = document.createElement("div");
       btns.className = "di-btns";
@@ -6916,13 +7003,16 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         resolve();
       }
       function confirm(){
-        const xi = parseInt(xSel.value, 10);
-        const yIndices = checks.filter(function(ch){ return ch.cb.checked && !ch.cb.disabled; })
-                               .map(function(ch){ return ch.index; });
+        const picked = checks.filter(function(ch){ return ch.cb.checked && !ch.cb.disabled; });
+        const yIndices = picked.map(function(ch){ return ch.index; });
         if (!yIndices.length){
           vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : choisissez au moins une colonne Y." });
           return;
         }
+        // X commun (nombre) ou, en mode paires, un X par Y selectionne (tableau).
+        const xi = pairsMode()
+          ? picked.map(function(ch){ return parseInt(ch.rowX.value, 10); })
+          : parseInt(xSel.value, 10);
         const series = DataImport.seriesFromColumns(cols, xi, yIndices, nameInput.value.trim())
                                  .filter(function(s){ return s.x.length; });
         if (!series.length){
@@ -6930,6 +7020,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
           return;
         }
         if (target === "new"){ applyNewFigure(series, nameInput.value.trim()); }
+        else if (target && target.el){ applyOverlayToEl(target.el, series); }
         else { applyOverlay(target, series); }
         close();
       }
@@ -7016,7 +7107,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       if (files && importFileMode === "digitize"){
         if (files.length > 0){ digOpenFiles(files); }
       } else if (files){
-        for (let i = 0; i < files.length; i++){ routeSystemImage(files[i]); }
+        // Bouton « Image -> graphe + code » : nouvelle figure (pas de cible).
+        for (let i = 0; i < files.length; i++){ routeSystemImage(files[i], { target: "new" }); }
       }
       importFileMode = "image";
       imageFileInput.value = "";   // permet de re-selectionner le meme fichier
@@ -7053,25 +7145,58 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   // donnees Chaz Plots bascule automatiquement vers la DIGITALISATION : on garde
   // le File ici, l'extension repond `imageNoEmbed` quand il n'a rien trouve, et
   // on ouvre l'overlay de digitalisation sur ces images.
-  const pendingImageFiles = {};   // requestId -> File (en attente de reponse extension)
+  // requestId -> { file, target, digitize } pour rattacher la reponse de
+  // l'extension (imageSpec / imageNoEmbed) au depot d'origine : `target` indique
+  // sur QUEL graphe superposer (comme le CSV), `file` sert au repli digitalisation.
+  const pendingImage = {};
   let imageReqSeq = 0;
   let digFallbackFiles = [];
   let digFallbackTimer = null;
-  function routeSystemImage(file, allowDigitizeFallback){
+  function routeSystemImage(file, opts){
+    opts = opts || {};
     const r = new FileReader();
     r.onload = function(){
       const bytes = new Uint8Array(r.result);
       let bin = "";
       for (let i = 0; i < bytes.length; i++){ bin += String.fromCharCode(bytes[i]); }
-      const msg = { type: "importImageData", b64: btoa(bin), name: file.name };
-      if (allowDigitizeFallback){
-        const rid = "img" + (++imageReqSeq);
-        pendingImageFiles[rid] = file;
-        msg.requestId = rid;
-      }
-      vscodeApi.postMessage(msg);
+      const rid = "img" + (++imageReqSeq);
+      pendingImage[rid] = { file: file, target: opts.target || "new", digitize: !!opts.digitizeFallback };
+      vscodeApi.postMessage({ type: "importImageData", b64: btoa(bin), name: file.name,
+                             requestId: rid, digitizeFallback: !!opts.digitizeFallback });
     };
     try { r.readAsArrayBuffer(file); } catch (e) {}
+  }
+
+  // Ajoute des traces Plotly BRUTES (issues d'une image auto-portee) sur un graphe
+  // existant. Persiste sur une vraie figure de l'historique, live sinon. Renvoie
+  // false si la cible n'est pas un graphe Plotly (-> appelant cree une figure).
+  function overlayPlotlyTraces(el, traces){
+    if (!el || !el._spFig || !el._spFig.plotly || typeof Plotly === "undefined" || !traces.length){ return false; }
+    const fid = el._spFig.id;
+    const persist = fid != null && figStore[fid];
+    traces.forEach(function(t){
+      const tc = clone(t); tc._spImported = true;
+      el._spFig.plotly.data.push(clone(tc));
+      if (el._spBaseData){ el._spBaseData.push(clone(tc)); }
+      Plotly.addTraces(el, clone(tc));
+      if (persist){ vscodeApi.postMessage({ type: "appendFigureTrace", id: fid, trace: clone(tc) }); }
+    });
+    scheduleUndoRecord(el);
+    vscodeApi.postMessage({ type: "notify", level: "info",
+      text: "Chaz Plots : image superposee (" + traces.length + " courbe(s))"
+        + (persist ? " — Ctrl+Z pour annuler." : ".") });
+    return true;
+  }
+
+  // Spec d'image recue : superposer sur la cible (depot sur une figure), sinon
+  // creer une nouvelle figure (depot sur le vide ou bouton).
+  function overlayOrNewFromSpec(target, title, plotly){
+    const traces = (plotly && plotly.data) || [];
+    let el = null;
+    if (target && target.el){ el = target.el; }
+    else if (typeof target === "string" && target !== "new"){ el = document.getElementById("plot-" + target); }
+    if (el && overlayPlotlyTraces(el, traces)){ return; }
+    vscodeApi.postMessage({ type: "createFigureFromData", title: title || "Figure importée", plotly: plotly });
   }
   // Regroupe les images « sans donnees Chaz Plots » d'un meme glisser pour les
   // digitaliser en une seule file (les reponses extension arrivent en ordre disperse).
@@ -7103,15 +7228,19 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       for (let i = 0; i < files.length; i++){
         const f = files[i];
         if (/\.(png|svg)$/i.test(f.name)){
-          // image avec donnees Chaz Plots -> code ; sans donnees -> digitalisation (fallback)
-          routeSystemImage(f, true);
+          // image auto-portee -> superpose sur la figure cible (ou nouvelle figure
+          // sur le vide), + code en arriere-plan ; sans donnees -> digitalisation.
+          routeSystemImage(f, { target: target, digitizeFallback: true });
         } else { queueCsvImport(readSystemFile(f), target); }         // csv/dat/txt -> overlay/nouveau
       }
       return;
     }
     urisFromTransfer(dt).forEach(function(u){
-      if (/\.(png|svg)(\?|#|$)/i.test(u)){ vscodeApi.postMessage({ type: "importImageUri", uri: u }); }
-      else { queueCsvImport(readVscodeUri(u), target); }
+      if (/\.(png|svg)(\?|#|$)/i.test(u)){
+        const rid = "img" + (++imageReqSeq);
+        pendingImage[rid] = { file: null, target: target, digitize: false };
+        vscodeApi.postMessage({ type: "importImageUri", uri: u, requestId: rid });
+      } else { queueCsvImport(readVscodeUri(u), target); }
     });
   });
 
@@ -7330,11 +7459,16 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         n = n + 1;
       }
       refreshCount();
+    } else if (msg.type === "imageSpec"){
+      // Image auto-portee : superposer sur la cible (depot sur figure) ou nouvelle figure.
+      const p = pendingImage[msg.requestId];
+      if (msg.requestId != null){ delete pendingImage[msg.requestId]; }
+      overlayOrNewFromSpec(p ? p.target : "new", msg.title, msg.plotly);
     } else if (msg.type === "imageNoEmbed"){
       // Image deposee sans donnees Chaz Plots -> on la digitalise.
-      const f = pendingImageFiles[msg.requestId];
-      if (msg.requestId != null){ delete pendingImageFiles[msg.requestId]; }
-      if (f){ scheduleDigFallback(f); }
+      const p = pendingImage[msg.requestId];
+      if (msg.requestId != null){ delete pendingImage[msg.requestId]; }
+      if (p && p.file){ scheduleDigFallback(p.file); }
     } else if (msg.type === "dataFileContent"){
       // Reponse a readDataFile (glisser depuis l'explorateur VS Code).
       const resolve = dataReadPending[msg.requestId];
@@ -7349,7 +7483,11 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     const menu = document.getElementById("globalTools");
     if (menu){ menu.open = false; }
   }
-  document.getElementById("importCsv").addEventListener("click", function(){ closeGlobalTools(); pickCsvForImport("new"); });
+  document.getElementById("importCsv").addEventListener("click", function(){
+    closeGlobalTools();
+    // En comparaison : superposer sur le graphe de comparaison ; sinon nouveau graphe.
+    pickCsvForImport(activeOverlayTarget(null) || "new");
+  });
   document.getElementById("importImage").addEventListener("click", function(){ closeGlobalTools(); pickImageForImport(); });
   document.getElementById("pasteFig").addEventListener("click", function(){ closeGlobalTools(); vscodeApi.postMessage({ type: "pasteFigure" }); });
   document.getElementById("saveAll").addEventListener("click", function(){

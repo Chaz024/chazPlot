@@ -32,3 +32,6 @@ _toolbar_variants.html
 ig_*.png
 montage.py
 montage_exemple.md
+tools/
+tmp/
+*.mp4

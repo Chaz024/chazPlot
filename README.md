@@ -61,9 +61,10 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
 - **Import CSV / DAT** : glissez un `.csv`, `.dat` ou `.txt` sur une figure pour
   superposer des mesures, ou sur la zone vide pour creer un nouveau graphe. Le
   bouton **Importer CSV** ouvre le meme assistant de mapping X/Y sans glisser-deposer.
-- **Image -> code matplotlib** : les PNG/SVG exportes peuvent embarquer leurs
-  donnees Plotly ; redeposez l'image dans Chaz Plots pour regenerer un script
-  matplotlib propre.
+- **Image -> graphe + code matplotlib** : les PNG/SVG exportes embarquent leurs
+  donnees Plotly ; redeposez l'image dans Chaz Plots (ou bouton « Image -> graphe
+  + code ») pour **retracer la figure** dans le panneau *et* obtenir le script
+  matplotlib qui la reproduit.
 - **Digitalisation d'une image quelconque** : extraire les courbes d'une image
   PNG/SVG quelconque (graphe public, photographie, scan). Via le bouton
   « Digitaliser », ou simplement en **glissant l'image dans le panneau avec

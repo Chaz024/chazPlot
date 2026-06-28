@@ -58,6 +58,56 @@ check("plusieurs Y -> une serie par colonne", function () {
   assert.strictEqual(series[1].name, "f: b");
 });
 
+check("xIndex tableau -> un X propre a chaque Y (donnees en paires)", function () {
+  // colonnes : x1,y1,x2,y2
+  const r = DataImport.parseDelimited("x1,y1,x2,y2\n0,10,100,1\n1,20,200,2\n");
+  const series = DataImport.seriesFromColumns(r.columns, [0, 2], [1, 3], "p");
+  assert.strictEqual(series.length, 2);
+  assert.deepStrictEqual(series[0].x, [0, 1]);     // y1 utilise x1
+  assert.deepStrictEqual(series[0].y, [10, 20]);
+  assert.deepStrictEqual(series[1].x, [100, 200]); // y2 utilise x2
+  assert.deepStrictEqual(series[1].y, [1, 2]);
+});
+
+check("xIndex tableau avec une entree indice (-1)", function () {
+  const r = DataImport.parseDelimited("x1,y1,y2\n5,10,1\n6,20,2\n");
+  const series = DataImport.seriesFromColumns(r.columns, [0, -1], [1, 2], "");
+  assert.deepStrictEqual(series[0].x, [5, 6]);   // y1 -> x1
+  assert.deepStrictEqual(series[1].x, [0, 1]);   // y2 -> indice
+});
+
+check("virgule decimale (Excel FR) avec delimiteur ; -> parsee", function () {
+  const r = DataImport.parseDelimited('x;y\n"0,5";"1,25"\n"1,5";"2,75"\n');
+  assert.strictEqual(r.delimiter, ";");
+  assert.deepStrictEqual(r.columns[0].values, [0.5, 1.5]);
+  assert.deepStrictEqual(r.columns[1].values, [1.25, 2.75]);
+});
+
+check("virgule = delimiteur -> point decimal conserve (pas de conversion)", function () {
+  const r = DataImport.parseDelimited("a,b\n1.5,2\n3.5,4\n");
+  assert.strictEqual(r.delimiter, ",");
+  assert.deepStrictEqual(r.columns[0].values, [1.5, 3.5]);
+});
+
+check("round-trip : export CsvExport large -> reimport DataImport (paires auto)", function () {
+  const CSV = require("../media/csv_export.js");
+  const wide = CSV.buildWideCsv([
+    { name: "A", x: [0, 1, 2], y: [10, 20, 30] },
+    { name: "B", x: [5, 6, 7], y: [1, 2, 3] },
+  ], { precision: 2 });
+  const r = DataImport.parseDelimited(wide);
+  // le format groupe est detecte : paires (x,y) reconstituees, noms conserves
+  assert.deepStrictEqual(r.pairs, { xIndices: [0, 3], yIndices: [1, 4] });
+  const series = DataImport.seriesFromColumns(r.columns, r.pairs.xIndices, r.pairs.yIndices, "");
+  assert.strictEqual(series.length, 2);
+  assert.strictEqual(series[0].name, "A");
+  assert.deepStrictEqual(series[0].x, [0, 1, 2]);
+  assert.deepStrictEqual(series[0].y, [10, 20, 30]);
+  assert.strictEqual(series[1].name, "B");
+  assert.deepStrictEqual(series[1].x, [5, 6, 7]);
+  assert.deepStrictEqual(series[1].y, [1, 2, 3]);
+});
+
 check("fichier vide -> erreur", function () {
   assert.ok(DataImport.parseDelimited("   ").error);
   assert.ok(DataImport.parseDelimited("").error);
