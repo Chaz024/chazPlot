@@ -64,12 +64,17 @@ lecteur intégré, et tout est **persisté** d'une session à l'autre.
 - **Image -> code matplotlib** : les PNG/SVG exportes peuvent embarquer leurs
   donnees Plotly ; redeposez l'image dans Chaz Plots pour regenerer un script
   matplotlib propre.
-- **Digitalisation d'une image quelconque** : bouton « Digitaliser » pour extraire
-  les courbes d'une image PNG/SVG quelconque (graphe public, photographie, scan).
+- **Digitalisation d'une image quelconque** : extraire les courbes d'une image
+  PNG/SVG quelconque (graphe public, photographie, scan). Via le bouton
+  « Digitaliser », ou simplement en **glissant l'image dans le panneau avec
+  Shift** — si elle ne contient pas de données Chaz Plots, l'outil de
+  digitalisation s'ouvre (une image auto-portée part, elle, en « Image → code »).
   Détection automatique par couleur et style de trait ; calibration par 4 nombres
-  (min/max des axes X et Y) ; revue interactive avec cases à cocher ; mode manuel
-  par clics pour les cas ambigus. Les courbes extraites deviennent une nouvelle
-  figure, peuvent être exportées en CSV ou converties en code matplotlib.
+  (min/max des axes X et Y) ; brosse-guide et mode manuel par clics pour les cas
+  ambigus ; revue interactive avec cases à cocher. Les courbes extraites
+  deviennent une nouvelle figure, peuvent être exportées en CSV ou converties en
+  code matplotlib. **Plusieurs images à la fois** sont traitées à la suite (file
+  d'attente avec compteur « k/N » et bouton « Suivante »).
 - **Planche multi-panneaux** : composez plusieurs figures selectionnees en une
   planche `(a)`, `(b)`, `(c)` avec grille, ordre, largeur cible et legende partagee.
 - **Copier-coller de figures** : copiez une figure dans une fenetre VS Code et
