@@ -1092,8 +1092,16 @@ function setupPanel(p) {
     else if (msg.type === "saveCustomPreset") { saveCustomPreset(msg.name, msg.style); }
     else if (msg.type === "readDataFile") { readDataFile(msg.requestId, msg.uri, msg.target); }
     else if (msg.type === "importImageData") {
-      try { generateCodeFromImage(Buffer.from(msg.b64 || "", "base64"), msg.name); }
-      catch (e) { /* image illisible */ }
+      try {
+        const buf = Buffer.from(msg.b64 || "", "base64");
+        // Glisser-deposer (requestId present) : image SANS donnees Chaz Plots ->
+        // on bascule vers la digitalisation cote webview plutot qu'un message sec.
+        if (msg.requestId != null && !extractEmbeddedFigure(buf, msg.name)) {
+          postToWebview({ type: "imageNoEmbed", requestId: msg.requestId, name: msg.name });
+        } else {
+          generateCodeFromImage(buf, msg.name);
+        }
+      } catch (e) { /* image illisible */ }
     }
     else if (msg.type === "importImageUri") {
       try {

@@ -25,3 +25,10 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 docs/
+
+# Brouillons / maquettes / outils sans rapport avec l'extension
+_preview_mockup.html
+_toolbar_variants.html
+ig_*.png
+montage.py
+montage_exemple.md

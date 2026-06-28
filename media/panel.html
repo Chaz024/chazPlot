@@ -73,10 +73,9 @@
     border:1px solid color-mix(in srgb, var(--sp-border) 70%, transparent);
   }
   .toolbar .selection-tools{
-    display:none; order:2; width:100%; align-items:center; gap:8px; flex-wrap:wrap;
-    margin-top:2px; padding:7px 8px;
-    border:1px solid color-mix(in srgb, var(--sp-accent) 25%, var(--sp-border));
-    border-radius:8px; background:color-mix(in srgb, var(--sp-accent) 8%, transparent);
+    display:none; order:2; width:100%; align-items:center; gap:10px; flex-wrap:wrap;
+    margin-top:6px; padding:8px 2px 0;
+    border-top:1px solid color-mix(in srgb, var(--sp-border) 80%, transparent);
   }
   .toolbar .selection-tools.show{ display:flex; }
   .toolbar .compare-status{ font-size:12px; opacity:.9; white-space:nowrap; font-weight:650; }
@@ -96,6 +95,56 @@
     background:color-mix(in srgb, var(--sp-surface) 72%, transparent);
   }
   .fit-toggle input{ accent-color:var(--sp-accent); }
+
+  /* separateur vertical entre groupes de la barre */
+  .toolbar .sep{
+    width:1px; height:22px; flex:0 0 auto;
+    background:color-mix(in srgb, var(--sp-border) 85%, transparent);
+  }
+
+  /* pastille bleue « N selectionnes » */
+  .selection-pill{
+    display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+    height:30px; padding:0 12px; border-radius:999px;
+    font-size:12px; font-weight:650;
+    background: var(--vscode-button-background, var(--sp-accent));
+    color: var(--vscode-button-foreground, #fff);
+    border:1px solid transparent;
+  }
+  .selection-pill svg{ width:15px; height:15px; }
+
+  /* groupe d'actions de selection (gap, plus de segmente) */
+  .seg-group{ display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  /* bouton bascule « Garder la selection » */
+  .toggle-btn{ display:inline-flex; align-items:center; gap:7px; min-height:30px; padding:0 11px; }
+  .toggle-btn[aria-pressed="true"]{
+    background: var(--sp-accent-soft); color: var(--sp-text);
+    border-color: color-mix(in srgb, var(--sp-accent) 45%, transparent);
+  }
+
+  /* bouton icone danger (corbeille) dans la barre */
+  .iconbtn.danger{
+    width:30px; height:30px; opacity:.85;
+    color: var(--vscode-errorForeground, #f85149);
+    border:1px solid color-mix(in srgb, var(--vscode-errorForeground, #f85149) 32%, transparent);
+    background: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 9%, transparent);
+  }
+  .iconbtn.danger:hover{
+    opacity:1; background: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 18%, transparent);
+  }
+  .iconbtn.danger svg{ width:15px; height:15px; stroke-width:1.6; }
+
+  /* entetes de section + sous-liste de tri dans le menu Outils */
+  .action-menu-list .menu-section{
+    padding:7px 8px 3px; font-size:10px; font-weight:700; letter-spacing:.7px;
+    text-transform:uppercase; color:var(--sp-text-dim);
+  }
+  .sort-sublist{ display:flex; flex-direction:column; gap:2px; padding-left:6px; }
+  .sort-sublist[hidden]{ display:none; }
+  .sort-sublist button{ min-height:28px; font-weight:500; }
+  .sort-sublist button .menu-icon svg{ opacity:0; }
+  .sort-sublist button.active .menu-icon svg{ opacity:1; color:var(--sp-accent); }
 
   button{
     font-family:inherit; font-size:12px; cursor:pointer;
@@ -564,6 +613,8 @@
     font-weight:600; font-size:13px;
   }
   #digitizeOverlay .overlay-head button{ background:none; border:none; color:inherit; cursor:pointer; font-size:14px; }
+  #digitizeOverlay .dig-queue-pos{ margin-left:10px; font-size:12px; font-weight:650; color:#fff; background:var(--sp-accent, #3794ff); border-radius:999px; padding:2px 10px; }
+  #digitizeOverlay #digNextBtn{ font-size:12px !important; font-weight:600; color:var(--sp-accent, #3794ff); }
   #digitizeOverlay .dig-canvas-wrap{ position:relative; align-self:center; max-width:100%; line-height:0; }
   #digitizeOverlay #digCanvas{
     display:block; max-width:100%; max-height:50vh;
@@ -666,29 +717,42 @@
   <div class="toolbar">
     <span class="brand"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2.5 12.5h11M4 10l2.2-3 2.1 1.8L12 4"/></svg></span><span>Graphes</span></span>
     <span class="count" id="count">0 graphe</span>
+    <span class="sep" aria-hidden="true"></span>
     <label class="search-wrap" title="Filtrer par titre, tag ou provenance (script, fonction, branche/commit git)">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.8 11.2a4.4 4.4 0 1 1 0-8.8 4.4 4.4 0 0 1 0 8.8ZM10.2 10.2 13.5 13.5"/></svg>
       <input class="search" id="searchInput" type="search" placeholder="Filtrer titre, tag, script, commit...">
     </label>
     <span class="spacer"></span>
     <span class="selection-tools" id="selectionTools" hidden>
-      <span class="compare-status" id="compareStatus">0 selectionne</span>
-      <span class="segmented">
-        <button class="compact with-icon" id="compareSide" disabled title="Afficher les graphes selectionnes cote a cote"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h4v9h-4zM9.5 3.5h4v9h-4z"/></svg><span>Cote a cote</span></button>
-        <button class="compact with-icon" id="compareStack" disabled title="Superposer les graphes selectionnes quand leurs axes sont compatibles"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 10.5c2.4-4 4.6-4 7 0M6 12.5c2.4-4 4.6-4 7 0"/></svg><span>Superposer</span></button>
-        <button class="compact with-icon" id="boardBtn" disabled title="Composer une planche multi-panneaux (a)(b)(c) a partir des graphes selectionnes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3h4v4h-4zM9.5 3h4v4h-4zM2.5 10h4v3h-4zM9.5 10h4v3h-4z"/></svg><span>Planche</span></button>
+      <span class="selection-pill" id="compareStatus"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M5.5 8.2 7.2 9.9 10.6 6.3"/></svg><span id="compareStatusText">0 selectionne</span></span>
+      <span class="seg-group">
+        <button class="compact with-icon" id="compareSide" disabled title="Afficher les graphes selectionnes cote a cote"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="4.5" height="10" rx="1"/><rect x="9" y="3" width="4.5" height="10" rx="1"/></svg><span>Cote a cote</span></button>
+        <button class="compact with-icon" id="compareStack" disabled title="Superposer les graphes selectionnes quand leurs axes sont compatibles"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 14 5.5 8 8.5 2 5.5 8 2.5Z"/><path d="M2 8.5 8 11.5 14 8.5"/><path d="M2 11 8 14 14 11"/></svg><span>Superposer</span></button>
+        <button class="compact with-icon" id="boardBtn" disabled title="Composer une planche multi-panneaux (a)(b)(c) a partir des graphes selectionnes"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg><span>Planche</span></button>
       </span>
-      <label class="fit" title="Conserver la selection de figures quand de nouvelles figures arrivent (sinon elle se vide a chaque nouvelle figure)"><input type="checkbox" id="keepSelToggle"> Garder la selection</label>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="compact with-icon toggle-btn" id="keepSelToggle" aria-pressed="false" title="Conserver la selection de figures quand de nouvelles figures arrivent (sinon elle se vide a chaque nouvelle figure)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h8v11l-4-3-4 3z"/></svg><span>Garder la selection</span></button>
     </span>
     <label class="fit fit-toggle" title="Adapter automatiquement chaque graphe a la largeur disponible"><input type="checkbox" id="fitToggle" checked> Ajuster a la largeur</label>
     <button class="primary with-icon" id="saveAll" title="Enregistrer toutes les figures de l historique"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7M5.2 7.1 8 9.9l2.8-2.8M3.5 12.5h9"/></svg><span>Tout enregistrer</span></button>
     <details class="action-menu toolbar-tools" id="globalTools">
-      <summary class="textbtn action-menu-trigger" title="Importer, coller et actions secondaires"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg><span>Outils</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 6.5 8 9.5l3-3"/></svg></summary>
+      <summary class="textbtn action-menu-trigger" title="Importer, coller et actions secondaires"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 2.7a3 3 0 0 0-3.8 3.8l-4.4 4.4a1.2 1.2 0 0 0 1.7 1.7l4.4-4.4a3 3 0 0 0 3.8-3.8L11.4 4.6 9.9 4.1 9.4 2.6z"/></svg><span>Outils</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 6.5 8 9.5l3-3"/></svg></summary>
       <div class="action-menu-list">
+        <div class="menu-section" aria-hidden="true">Importer</div>
         <button id="importCsv" title="Importer un fichier .csv/.dat comme nouveau graphe (ou glisser-deposer sur un graphe pour superposer)"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4"/></svg></span><span>Importer CSV/DAT</span></button>
+        <div class="menu-section" aria-hidden="true">Creer / Coller</div>
         <button id="importImage" title="Generer le code matplotlib qui reproduit la courbe, depuis une image PNG/SVG auto-portee (exportee par Chaz Plots)"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v8H3zM5 10l2-2 1.5 1.5L10.5 7 13 10"/></svg></span><span>Image &rarr; code</span></button>
         <button id="digitizeImage" title="Extraire les points d'une figure depuis un PNG/SVG quelconque (non genere par Chaz Plots) : detection auto des courbes par couleur/style, calibration des axes, sortie figure/CSV/code"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v8H3zM5 8l2 2 4-4"/></svg></span><span>Digitaliser</span></button>
         <button id="pasteFig" title="Coller ici la figure copiee (depuis cette fenetre ou une autre)"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5h4M5 5h6v8H5zM4 6.5H3v6h1"/></svg></span><span>Coller une figure</span></button>
+        <div class="menu-section" aria-hidden="true">Organiser</div>
+        <button id="sortBtn" aria-expanded="false" title="Choisir l'ordre d'affichage des graphes"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h8M3 8h5M3 11.5h3M11 6V12M11 12l-2-2M11 12l2-2"/></svg></span><span>Trier par&hellip;</span></button>
+        <div class="sort-sublist" id="sortSublist" hidden>
+          <button data-sort="arrival" class="active"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8.5 7 11.5 12 5"/></svg></span><span>Ordre d'arrivee</span></button>
+          <button data-sort="title"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8.5 7 11.5 12 5"/></svg></span><span>Titre (A-Z)</span></button>
+          <button data-sort="type"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8.5 7 11.5 12 5"/></svg></span><span>Type</span></button>
+          <button data-sort="script"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8.5 7 11.5 12 5"/></svg></span><span>Script</span></button>
+          <button data-sort="date"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8.5 7 11.5 12 5"/></svg></span><span>Date (recent)</span></button>
+        </div>
         <div class="menu-sep" aria-hidden="true"></div>
         <button class="danger" id="deleteAll" title="Supprimer toutes les figures de l historique"><span class="menu-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.3 4.5V3h3.4v1.5M4.6 4.5 5.3 13.3h5.4l.7-8.8M7 7v3.8M9 7v3.8"/></svg></span><span>Tout supprimer</span></button>
       </div>
@@ -704,6 +768,7 @@
       <li>Utilisez Enregistrer ou Copier directement depuis chaque carte.</li>
       <li>Importez un fichier <code>.csv</code>/<code>.dat</code> via le bouton <strong>Importer CSV</strong> (barre d'outils = nouveau graphe ; menu d'un graphe = superposer). Le glisser-deposer marche aussi, mais maintenez <strong>Shift</strong> (sinon VS Code ouvre le fichier dans l'editeur).</li>
       <li>Une image <code>.png</code>/<code>.svg</code> exportee par Chaz Plots est <strong>auto-portee</strong> : reconstruisez le <strong>code matplotlib</strong> qui reproduit la courbe via le bouton <strong>Image &rarr; code</strong> (ou en deposant l'image avec <strong>Shift</strong>).</li>
+      <li><strong>Digitaliser</strong> une figure quelconque (capture, scan…) : glissez l'image dans le panneau avec <strong>Shift</strong> &mdash; si elle ne contient pas de donnees Chaz Plots, l'outil de digitalisation s'ouvre. Plusieurs images a la fois sont traitees a la suite.</li>
     </ul>
   </div>
 
@@ -929,7 +994,7 @@
 
 <div id="digitizeOverlay" class="overlay" style="display:none">
   <div class="overlay-card">
-    <div class="overlay-head">Digitalisation d'une image<button id="digClose" title="Fermer">&#x2715;</button></div>
+    <div class="overlay-head">Digitalisation d'une image<span id="digQueuePos" class="dig-queue-pos" style="display:none"></span><span style="flex:1"></span><button id="digNextBtn" title="Passer a l'image suivante de la file" style="display:none;margin-right:6px">Suivante &#9656;</button><button id="digClose" title="Fermer">&#x2715;</button></div>
     <p class="dig-help">But : retrouver les données (points X/Y) d'une figure. Suivez les 3 étapes ci-dessous.</p>
     <div class="dig-canvas-wrap">
       <canvas id="digCanvas"></canvas>
@@ -1213,7 +1278,8 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       selectionTools.hidden = !hasSelection;
       selectionTools.classList.toggle("show", hasSelection);
     }
-    compareStatus.textContent = total + (total > 1 ? " selectionnes" : " selectionne");
+    const statusText = document.getElementById("compareStatusText") || compareStatus;
+    statusText.textContent = total + (total > 1 ? " selectionnes" : " selectionne");
     const ready = total >= 2;
     compareSide.disabled = !ready;
     compareStack.disabled = !ready;
@@ -2567,7 +2633,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         text: "Chaz Plots : aucune donnee exportable en CSV pour cette figure." });
       return;
     }
-    const csv = CsvExport.buildCsv(series, { xRange: plotXRange(el) });
+    const csv = CsvExport.buildWideCsv(series, { xRange: plotXRange(el) });
     vscodeApi.postMessage({ type: "saveCsv", id: fig.id, csv: csv });
   }
 
@@ -6948,12 +7014,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     imageFileInput.addEventListener("change", function(){
       const files = imageFileInput.files;
       if (files && importFileMode === "digitize"){
-        if (files.length > 0){
-          const url = URL.createObjectURL(files[0]);
-          const im = new Image();
-          im.onload = function(){ URL.revokeObjectURL(url); digOpen(im); };
-          im.src = url;
-        }
+        if (files.length > 0){ digOpenFiles(files); }
       } else if (files){
         for (let i = 0; i < files.length; i++){ routeSystemImage(files[i]); }
       }
@@ -6988,15 +7049,39 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   });
   // Image PNG/SVG deposee : peut porter des donnees Chaz Plots embarquees -> on
   // l'envoie a l'extension qui lit le chunk et propose de recreer la figure.
-  function routeSystemImage(file){
+  // Si `allowDigitizeFallback` est vrai (cas du glisser-deposer), une image SANS
+  // donnees Chaz Plots bascule automatiquement vers la DIGITALISATION : on garde
+  // le File ici, l'extension repond `imageNoEmbed` quand il n'a rien trouve, et
+  // on ouvre l'overlay de digitalisation sur ces images.
+  const pendingImageFiles = {};   // requestId -> File (en attente de reponse extension)
+  let imageReqSeq = 0;
+  let digFallbackFiles = [];
+  let digFallbackTimer = null;
+  function routeSystemImage(file, allowDigitizeFallback){
     const r = new FileReader();
     r.onload = function(){
       const bytes = new Uint8Array(r.result);
       let bin = "";
       for (let i = 0; i < bytes.length; i++){ bin += String.fromCharCode(bytes[i]); }
-      vscodeApi.postMessage({ type: "importImageData", b64: btoa(bin), name: file.name });
+      const msg = { type: "importImageData", b64: btoa(bin), name: file.name };
+      if (allowDigitizeFallback){
+        const rid = "img" + (++imageReqSeq);
+        pendingImageFiles[rid] = file;
+        msg.requestId = rid;
+      }
+      vscodeApi.postMessage(msg);
     };
     try { r.readAsArrayBuffer(file); } catch (e) {}
+  }
+  // Regroupe les images « sans donnees Chaz Plots » d'un meme glisser pour les
+  // digitaliser en une seule file (les reponses extension arrivent en ordre disperse).
+  function scheduleDigFallback(file){
+    digFallbackFiles.push(file);
+    if (digFallbackTimer){ clearTimeout(digFallbackTimer); }
+    digFallbackTimer = setTimeout(function(){
+      const files = digFallbackFiles; digFallbackFiles = []; digFallbackTimer = null;
+      if (files.length){ digOpenFiles(files); }
+    }, 80);
   }
   function queueCsvImport(promise, target){
     importChain = importChain.then(function(){
@@ -7013,18 +7098,13 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     const dt = e.dataTransfer;
     const files = dt.files;
     if (files && files.length){
+      // Shift+Alt+drop : digitaliser les images (file d'attente si plusieurs).
+      if (e.altKey){ digOpenFiles(files); return; }
       for (let i = 0; i < files.length; i++){
         const f = files[i];
         if (/\.(png|svg)$/i.test(f.name)){
-          if (e.altKey){
-            // Shift+Alt+drop : digitaliser l'image (pas de donnees Chaz Plots)
-            const url = URL.createObjectURL(f);
-            const im = new Image();
-            im.onload = function(){ URL.revokeObjectURL(url); digOpen(im); };
-            im.src = url;
-          } else {
-            routeSystemImage(f);   // image -> recreation (extraction donnees Chaz Plots)
-          }
+          // image avec donnees Chaz Plots -> code ; sans donnees -> digitalisation (fallback)
+          routeSystemImage(f, true);
         } else { queueCsvImport(readSystemFile(f), target); }         // csv/dat/txt -> overlay/nouveau
       }
       return;
@@ -7250,6 +7330,11 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         n = n + 1;
       }
       refreshCount();
+    } else if (msg.type === "imageNoEmbed"){
+      // Image deposee sans donnees Chaz Plots -> on la digitalise.
+      const f = pendingImageFiles[msg.requestId];
+      if (msg.requestId != null){ delete pendingImageFiles[msg.requestId]; }
+      if (f){ scheduleDigFallback(f); }
     } else if (msg.type === "dataFileContent"){
       // Reponse a readDataFile (glisser depuis l'explorateur VS Code).
       const resolve = dataReadPending[msg.requestId];
@@ -7275,6 +7360,31 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     vscodeApi.postMessage({ type: "saveAll", ids: sel });
   });
   document.getElementById("deleteAll").addEventListener("click", function(){ closeGlobalTools(); vscodeApi.postMessage({ type: "deleteAll" }); });
+
+  // « Trier par… » : sous-liste dans le menu Outils -> applique sortMode.
+  (function(){
+    const sortBtn = document.getElementById("sortBtn");
+    const sublist = document.getElementById("sortSublist");
+    if (!sortBtn || !sublist){ return; }
+    sortBtn.addEventListener("click", function(e){
+      e.preventDefault();
+      const open = sublist.hidden;
+      sublist.hidden = !open;
+      sortBtn.setAttribute("aria-expanded", String(open));
+    });
+    sublist.querySelectorAll("button[data-sort]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        sortMode = btn.getAttribute("data-sort");
+        sublist.querySelectorAll("button[data-sort]").forEach(function(b){
+          b.classList.toggle("active", b === btn);
+        });
+        applySort();
+        closeGlobalTools();
+        sublist.hidden = true;
+        sortBtn.setAttribute("aria-expanded", "false");
+      });
+    });
+  })();
   if (searchInput){
     searchInput.addEventListener("input", function(e){
       searchQuery = e.target.value || "";
@@ -7287,12 +7397,71 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     resizeListPlots();
   });
 
-  document.getElementById("keepSelToggle").addEventListener("change", function(e){
-    keepCompareSelection = !!e.target.checked;
+  document.getElementById("keepSelToggle").addEventListener("click", function(e){
+    const btn = e.currentTarget;
+    keepCompareSelection = btn.getAttribute("aria-pressed") !== "true";
+    btn.setAttribute("aria-pressed", String(keepCompareSelection));
   });
 
   // ----- Digitalisation d'une image quelconque -----
   const digState = { img: null, box: null, curves: [], imageEl: null };
+
+  // File d'attente de digitalisation : permet de traiter plusieurs PNG/SVG a la
+  // suite (bouton ou glisser multi-fichiers). On charge tout en Image puis on
+  // ouvre l'overlay sur la 1re ; « Suivante » (ou « Nouvelle figure » sur une
+  // image non-derniere) passe a la suivante ; la fermeture vide la file.
+  let digQueue = [];
+  let digQueueIndex = 0;
+
+  function loadImageFile(file) {
+    return new Promise(function (resolve) {
+      const url = URL.createObjectURL(file);
+      const im = new Image();
+      im.onload = function () { URL.revokeObjectURL(url); resolve(im); };
+      im.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+      im.src = url;
+    });
+  }
+
+  // Point d'entree multi-fichiers : ouvre la file de digitalisation.
+  function digOpenFiles(files) {
+    const imgs = [];
+    for (let i = 0; i < files.length; i++) {
+      if (/\.(png|svg)$/i.test(files[i].name)) { imgs.push(files[i]); }
+    }
+    if (!imgs.length) { return; }
+    Promise.all(imgs.map(loadImageFile)).then(function (loaded) {
+      digQueue = loaded.filter(Boolean);
+      digQueueIndex = 0;
+      if (digQueue.length) { digOpen(digQueue[0]); }
+    });
+  }
+
+  function digUpdateQueueUi() {
+    const pos = document.getElementById("digQueuePos");
+    const next = document.getElementById("digNextBtn");
+    const many = digQueue.length > 1;
+    pos.style.display = many ? "" : "none";
+    if (many) { pos.textContent = "Image " + (digQueueIndex + 1) + " / " + digQueue.length; }
+    next.style.display = (many && digQueueIndex < digQueue.length - 1) ? "" : "none";
+  }
+
+  // Avance dans la file ; renvoie true si une image suivante a ete ouverte,
+  // false s'il n'y en a plus (l'appelant ferme alors l'overlay).
+  function digAdvanceQueue() {
+    if (digQueueIndex < digQueue.length - 1) {
+      digQueueIndex = digQueueIndex + 1;
+      digOpen(digQueue[digQueueIndex]);
+      return true;
+    }
+    return false;
+  }
+
+  function digCloseOverlay() {
+    document.getElementById("digitizeOverlay").style.display = "none";
+    digQueue = [];
+    digQueueIndex = 0;
+  }
 
   function digOpen(imgEl) {
     const ov = document.getElementById("digitizeOverlay");
@@ -7334,6 +7503,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
         vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : " + problematic + " courbe(s) ambiguë(s) (croisement/recouvrement) non affichée(s) — tracez-les avec « Brosse » ou « Manuel »." });
       }
       ov.style.display = "flex";
+      digUpdateQueueUi();
     } catch (err) {
       vscodeApi.postMessage({ type: "notify", level: "warn", text: "Chaz Plots : image illisible ou sans dimensions." });
     }
@@ -7362,7 +7532,7 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
       const cb = document.createElement("input");
       cb.type = "checkbox"; cb.checked = true; cb.dataset.idx = String(i);
       const sw = document.createElement("span");
-      sw.style.cssText = "display:inline-block;width:12px;height:12px;margin:0 6px;background:rgb(" + c.color.join(",") + ")";
+      sw.style.cssText = "display:inline-block;width:12px;height:12px;margin:0 6px;background:rgb(" + c.color.join(";") + ")";
       // selecteur de style : corrige une eventuelle mauvaise classification (ligne/points/tirets)
       const sel = document.createElement("select");
       sel.style.cssText = "margin:0 6px;font-size:12px";
@@ -7423,13 +7593,13 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
     return CurveDigitize.buildSpec(selected, digState.box, cal, "Digitalisation");
   }
 
-  document.getElementById("digClose").addEventListener("click", function () {
-    document.getElementById("digitizeOverlay").style.display = "none";
-  });
+  document.getElementById("digClose").addEventListener("click", digCloseOverlay);
+  document.getElementById("digNextBtn").addEventListener("click", function () { digAdvanceQueue(); });
   document.getElementById("digOutFigure").addEventListener("click", function () {
     const spec = digBuildSpec(); if (!spec) return;
     vscodeApi.postMessage({ type: "createFigureFromData", title: spec.title, plotly: spec.plotly });
-    document.getElementById("digitizeOverlay").style.display = "none";
+    // File multi-images : passer a la suivante plutot que de fermer ; sinon fermer.
+    if (!digAdvanceQueue()) { digCloseOverlay(); }
   });
   document.getElementById("digOutCode").addEventListener("click", function () {
     const spec = digBuildSpec(); if (!spec) return;
@@ -7437,11 +7607,9 @@ window.CHazPlotsCustomStyles = {{customPlotStylesJson}};
   });
   document.getElementById("digOutCsv").addEventListener("click", function () {
     const spec = digBuildSpec(); if (!spec) return;
-    const rows = [["serie", "x", "y"]];
-    spec.plotly.data.forEach(function (t) {
-      for (let i = 0; i < t.x.length; i++) rows.push([t.name, t.x[i], t.y[i]]);
-    });
-    vscodeApi.postMessage({ type: "saveCsv", base: "digitalisation", csv: rows.map(function (r) { return r.join(","); }).join("\n") });
+    const series = spec.plotly.data.map(function (t) { return { name: t.name, x: t.x.slice(), y: t.y.slice() }; });
+    const csv = CsvExport.buildWideCsv(series, {});
+    vscodeApi.postMessage({ type: "saveCsv", base: "digitalisation", csv: csv });
   });
 
   // ----- Modes du canvas : manuel (clic couleur), brosse (peindre une zone),
