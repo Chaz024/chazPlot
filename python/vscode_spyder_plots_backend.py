@@ -1,3 +1,55 @@
+import pandas as pd
+import numpy as np
+
+temperatures = list(range(100, 1600, 100))
+
+# 1. Enthalpie Sensible Brute (kJ/kg) 
+# Source : Expériences discrètes NIST-JANAF 4th Ed. (1998)
+h_sensible = {
+    "Ar":  [-103, -51, 1, 53, 105, 157, 209, 261, 313, 365, 417, 469, 521, 573, 625],
+    "CO":  [-206, -101, 2, 106, 212, 320, 430, 543, 658, 775, 894, 1015, 1138, 1262, 1388],
+    "N2":  [-203, -101, 2, 106, 211, 318, 426, 537, 651, 766, 884, 1004, 1125, 1247, 1371],
+    "CO2": [np.nan, np.nan, 2, 92, 192, 299, 412, 528, 649, 772, 898, 1026, 1156, 1287, 1420],
+    "NO":  [-202, -98, 2, 101, 202, 305, 411, 519, 630, 742, 856, 973, 1090, 1208, 1328],
+    "O2":  [-181, -90, 2, 95, 191, 290, 392, 497, 605, 714, 824, 935, 1048, 1161, 1275],
+    "H2":  [-2607, -1319, 27, 1472, 2923, 4378, 5838, 7307, 8789, 10287, 11803, 13341, 14900, 16480, 18081],
+    "H2O": [np.nan, np.nan, 3, 193, 388, 590, 798, 1013, 1235, 1464, 1700, 1944, 2194, 2450, 2713],
+    "H":   [np.nan, np.nan, 38, 2100, 4162, 6224, 8286, 10348, 12410, 14472, 16534, 18597, 20659, 22721, 24783],
+    "O":   [np.nan, np.nan, 3, 138, 271, 403, 535, 666, 797, 928, 1058, 1189, 1319, 1450, 1580],
+    "N":   [np.nan, np.nan, 3, 151, 300, 448, 596, 745, 893, 1042, 1190, 1339, 1487, 1636, 1784],
+    "OH":  [np.nan, np.nan, 3, 168, 332, 494, 655, 815, 974, 1133, 1292, 1451, 1611, 1771, 1932]
+}
+
+# 2. Enthalpie Standard de Formation à 298.15 K (kJ/kg)
+# Source : Expériences NIST-JANAF 4th Ed. (1998)
+h_formation = {
+    "Ar": 0, "N2": 0, "O2": 0, "H2": 0, # Les éléments stables ont une énergie de formation nulle.
+    "CO": -3946, 
+    "CO2": -8942, 
+    "NO": 3009, 
+    "H2O": -13423, 
+    "H": 216280, 
+    "O": 15574, 
+    "N": 33747, 
+    "OH": 2292
+}
+
+# 3. Fusion mathématique pour recréer l'enthalpie absolue (Échelle Cantera)
+h_absolue = {}
+for espece in h_sensible:
+    h_absolue[espece] = [
+        (val + h_formation[espece]) if not np.isnan(val) else np.nan 
+        for val in h_sensible[espece]
+    ]
+
+def exporter_enthalpie_absolue():
+    df_h_abs = pd.DataFrame(h_absolue, index=temperatures).T
+    df_h_abs.index.name = "Espece"
+    df_h_abs.to_csv("enthalpie_absolue_janaf.csv", sep=";")
+    print("Fichier 'enthalpie_absolue_janaf.csv' généré. Données alignées sur Cantera.")
+
+if __name__ == "__main__":
+    exporter_enthalpie_absolue()
 
 # ============================================================
 # vscode_spyder_plots_backend.py — v3 (figures + animations)
