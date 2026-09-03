@@ -1,48 +1,4 @@
-import cantera as ct
-import matplotlib.pyplot as plt
-import numpy as np
 
-# Données expérimentales (T en K, Cp en kJ/kg.K)
-T_exp = np.array([300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200,
-                  1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100,
-                  2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000,
-                  3100, 3200, 3300, 3400, 3500, 3600, 3700, 3800, 3900, 4000])
-
-cp_exp = np.array([1.00, 1.01, 1.03, 1.05, 1.07, 1.10, 1.12, 1.14, 1.16, 1.17,
-                   1.19, 1.20, 1.21, 1.22, 1.23, 1.24, 1.25, 1.25, 1.26,
-                   1.27, 1.30, 1.34, 1.41, 1.51, 1.66, 1.86, 2.12, 2.45,
-                   2.83, 3.23, 3.57, 3.78, 3.82, 3.70, 3.45, 3.14, 2.85, 2.62])
-
-# Création du gaz avec le mécanisme par défaut pour l'air
-gas = ct.Solution('air.yaml')
-P = ct.one_atm
-
-# Liste pour stocker les résultats de Cantera
-cp_cantera = []
-
-# Boucle de calcul
-for T in T_exp:
-    # 1. Imposer la température T et la pression P au gaz
-    gas.TP = T, P
-    
-    # 2. Extraire le Cp massique (et le convertir en kJ/kg.K)
-    # Cantera renvoie le Cp massique en J/(kg.K) par défaut, il faut donc diviser par 1000
-    cp_val = gas.cp_mass / 1000.0
-    
-    # 3. Ajouter cette valeur à la liste cp_cantera
-    cp_cantera.append(cp_val)
-
-# Tracé du graphique
-plt.figure(figsize=(10, 6))
-plt.plot(T_exp, cp_exp, 'o-', label='Expérimental', color='blue')
-# Ligne décommentée pour afficher les résultats Cantera
-plt.plot(T_exp, cp_cantera, 's--', label='Cantera (air.yaml)', color='red') 
-plt.xlabel('Température (K)')
-plt.ylabel('Cp massique (kJ/kg.K)')
-plt.title("Comparaison du Cp de l'air : Expérimental vs Cantera")
-plt.legend()
-plt.grid(True)
-plt.show()
 
 
 
