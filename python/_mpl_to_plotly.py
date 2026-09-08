@@ -1,4 +1,520 @@
 
+"""
+jisc_tool.py -- Outil unifie pour l'etude d'injection(s) en ecoulement
+transverse supersonique (solveur Euler+Navier-Stokes laminaire, HLLC).
+
+Deux modes :
+
+  MODE RUN  -- calcule un cas et sauvegarde le resultat sur disque (.npz)
+      python3 jisc_tool.py run --jets 1
+      python3 jisc_tool.py run --jets 2 --spacing 3.0
+      python3 jisc_tool.py run --jets 2 --spacing 4.5 --nsteps 3000 --p0 7e5
+
+  MODE VIZ  -- charge un ou plusieurs resultats sauvegardes et les affiche
+      python3 jisc_tool.py viz --jets 1                     (plot detaille)
+      python3 jisc_tool.py viz --jets 2 --spacing 3.0        (plot detaille)
+      python3 jisc_tool.py viz --jets 2 --spacing 1.5 3.0 6.0 --compare
+                                                              (comparaison empilee)
+
+Les resultats sont stockes dans ./jisc_results/ avec un nom automatique
+base sur les parametres (nombre de jets, espacement). Le mode run peut
+etre relance plus tard avec d'autres parametres sans toucher au code.
+
+Rappel des limites physiques du modele (voir aussi les commentaires dans
+le corps du fichier) :
+  - Navier-Stokes LAMINAIRE 2D, pas de turbulence.
+  - Viscosite de Sutherland amplifiee numeriquement (voir --visc-amp) car
+    la couche limite reelle est trop fine pour ce maillage.
+  - Le "jet" est un gaz (proxy aerodynamique), pas un liquide.
+"""
+
+import argparse
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ----------------------------------------------------------------------
+# Constantes physiques
+# ----------------------------------------------------------------------
+GAMMA = 1.4
+R_GAS = 287.0
+PRANDTL = 0.71
+CP = GAMMA * R_GAS / (GAMMA - 1.0)
+
+SUTH_MU0 = 1.716e-5
+SUTH_T0 = 273.15
+SUTH_S = 110.4
+
+RESULTS_DIR = "jisc_results"
+
+
+def sutherland_mu(T, visc_amp):
+    mu = SUTH_MU0 * (T / SUTH_T0)**1.5 * (SUTH_T0 + SUTH_S) / (T + SUTH_S)
+    return mu * visc_amp
+
+
+# ----------------------------------------------------------------------
+# Variables conservatives <-> primitives
+# ----------------------------------------------------------------------
+def cons_to_prim(U):
+    rho = U[0]
+    u = U[1] / rho
+    v = U[2] / rho
+    E = U[3]
+    p = (GAMMA - 1) * (E - 0.5 * rho * (u**2 + v**2))
+    p = np.maximum(p, 1e-6)
+    return rho, u, v, p
+
+
+def prim_to_cons(rho, u, v, p):
+    E = p / (GAMMA - 1) + 0.5 * rho * (u**2 + v**2)
+    return np.array([rho, rho * u, rho * v, E])
+
+
+def flux_x(U):
+    rho, u, v, p = cons_to_prim(U)
+    E = U[3]
+    return np.array([rho * u, rho * u**2 + p, rho * u * v, u * (E + p)])
+
+
+# ----------------------------------------------------------------------
+# HLLC vectorise
+# ----------------------------------------------------------------------
+def hllc_flux_x_vec(UL, UR):
+    rhoL, uL, vL, pL = cons_to_prim(UL)
+    rhoR, uR, vR, pR = cons_to_prim(UR)
+    aL = np.sqrt(GAMMA * pL / rhoL)
+    aR = np.sqrt(GAMMA * pR / rhoR)
+
+    SL = np.minimum(uL - aL, uR - aR)
+    SR = np.maximum(uL + aL, uR + aR)
+
+    FL = flux_x(UL)
+    FR = flux_x(UR)
+
+    denom = rhoL * (SL - uL) - rhoR * (SR - uR)
+    denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+    SM = (pR - pL + rhoL * uL * (SL - uL) - rhoR * uR * (SR - uR)) / denom
+
+    denomL = np.where(np.abs(SL - SM) < 1e-12, 1e-12, SL - SM)
+    pStarL = pL + rhoL * (uL - SL) * (uL - SM)
+    rhoStarL = rhoL * (SL - uL) / denomL
+    EStarL = ((SL - uL) * UL[3] - pL * uL + pStarL * SM) / denomL
+    UStarL = np.array([rhoStarL, rhoStarL * SM, rhoStarL * vL, EStarL])
+    F_starL = FL + SL * (UStarL - UL)
+
+    denomR = np.where(np.abs(SR - SM) < 1e-12, 1e-12, SR - SM)
+    pStarR = pR + rhoR * (uR - SR) * (uR - SM)
+    rhoStarR = rhoR * (SR - uR) / denomR
+    EStarR = ((SR - uR) * UR[3] - pR * uR + pStarR * SM) / denomR
+    UStarR = np.array([rhoStarR, rhoStarR * SM, rhoStarR * vR, EStarR])
+    F_starR = FR + SR * (UStarR - UR)
+
+    mask_L = SL >= 0
+    mask_R = SR <= 0
+    mask_starL = (~mask_L) & (~mask_R) & (SM >= 0)
+
+    F = np.zeros_like(FL)
+    for k in range(4):
+        F[k] = np.where(mask_L, FL[k],
+                np.where(mask_R, FR[k],
+                np.where(mask_starL, F_starL[k], F_starR[k])))
+    return F
+
+
+def hllc_flux_y_vec(UL, UR):
+    def swap(U):
+        return np.array([U[0], U[2], U[1], U[3]])
+    F = hllc_flux_x_vec(swap(UL), swap(UR))
+    return np.array([F[0], F[2], F[1], F[3]])
+
+
+# ----------------------------------------------------------------------
+# Grille / etat initial / injection choquee
+# ----------------------------------------------------------------------
+class Domain:
+    def __init__(self, nx, ny, Lx, Ly):
+        self.nx, self.ny = nx, ny
+        self.Lx, self.Ly = Lx, Ly
+        self.dx = Lx / nx
+        self.dy = Ly / ny
+        self.x = (np.arange(nx) + 0.5) * self.dx
+        self.y = (np.arange(ny) + 0.5) * self.dy
+
+
+def init_freestream(dom, M_inf, p_inf=101325.0, T_inf=250.0):
+    rho_inf = p_inf / (R_GAS * T_inf)
+    a_inf = np.sqrt(GAMMA * R_GAS * T_inf)
+    u_inf = M_inf * a_inf
+    U = np.zeros((4, dom.nx, dom.ny))
+    U[0] = rho_inf
+    U[1] = rho_inf * u_inf
+    U[2] = 0.0
+    U[3] = p_inf / (GAMMA - 1) + 0.5 * rho_inf * u_inf**2
+    return U, dict(rho_inf=rho_inf, u_inf=u_inf, p_inf=p_inf, a_inf=a_inf, T_inf=T_inf)
+
+
+def choked_jet_exit_state(P0_jet, T0_jet):
+    ratio_p = (2.0 / (GAMMA + 1.0)) ** (GAMMA / (GAMMA - 1.0))
+    ratio_T = 2.0 / (GAMMA + 1.0)
+    p_exit = P0_jet * ratio_p
+    T_exit = T0_jet * ratio_T
+    rho_exit = p_exit / (R_GAS * T_exit)
+    u_exit = np.sqrt(GAMMA * R_GAS * T_exit)
+    return rho_exit, u_exit, p_exit
+
+
+def apply_bc(U, dom, freestream, jet):
+    rho_inf, u_inf, p_inf = freestream['rho_inf'], freestream['u_inf'], freestream['p_inf']
+
+    U[0, 0, :] = rho_inf
+    U[1, 0, :] = rho_inf * u_inf
+    U[2, 0, :] = 0.0
+    U[3, 0, :] = p_inf / (GAMMA - 1) + 0.5 * rho_inf * u_inf**2
+
+    U[:, -1, :] = U[:, -2, :]
+    U[:, :, -1] = U[:, :, -2]
+
+    # Paroi : non-glissement (u=v=0), adiabatique -- puis on ecrase les fentes
+    j_wall = 0
+    rho_w, u_w, v_w, p_w = cons_to_prim(U[:, :, 1])
+    U[:, :, j_wall] = prim_to_cons(rho_w, -u_w, -v_w, p_w)
+
+    for slot in jet['slots']:
+        in_slot = (dom.x >= slot['x_min']) & (dom.x <= slot['x_max'])
+        rho_j, u_j, p_j = slot['rho_j'], slot['u_j'], slot['p_j']
+        E_j = p_j / (GAMMA - 1) + 0.5 * rho_j * u_j**2
+        U[0, in_slot, j_wall] = rho_j
+        U[1, in_slot, j_wall] = 0.0
+        U[2, in_slot, j_wall] = rho_j * u_j
+        U[3, in_slot, j_wall] = E_j
+
+    return U
+
+
+# ----------------------------------------------------------------------
+# Flux visqueux (Navier-Stokes laminaire)
+# ----------------------------------------------------------------------
+def cell_centered_fields(U, visc_amp):
+    rho, u, v, p = cons_to_prim(U)
+    T = p / (rho * R_GAS)
+    mu = sutherland_mu(T, visc_amp)
+    k = mu * CP / PRANDTL
+    return rho, u, v, p, T, mu, k
+
+
+def viscous_flux_x(U, dom, visc_amp):
+    rho, u, v, p, T, mu, k = cell_centered_fields(U, visc_amp)
+    dudx = np.gradient(u, dom.dx, axis=0)
+    dudy = np.gradient(u, dom.dy, axis=1)
+    dvdx = np.gradient(v, dom.dx, axis=0)
+    dvdy = np.gradient(v, dom.dy, axis=1)
+    dTdx = np.gradient(T, dom.dx, axis=0)
+
+    f = lambda a: 0.5 * (a[:-1, :] + a[1:, :])
+    u_f, v_f, mu_f, k_f = f(u), f(v), f(mu), f(k)
+    dudx_f, dudy_f, dvdx_f, dvdy_f, dTdx_f = f(dudx), f(dudy), f(dvdx), f(dvdy), f(dTdx)
+
+    tau_xx = mu_f * (4.0/3.0 * dudx_f - 2.0/3.0 * dvdy_f)
+    tau_xy = mu_f * (dudy_f + dvdx_f)
+    qx = k_f * dTdx_f
+
+    Fv = np.zeros((4,) + tau_xx.shape)
+    Fv[1] = tau_xx
+    Fv[2] = tau_xy
+    Fv[3] = u_f * tau_xx + v_f * tau_xy + qx
+    return Fv
+
+
+def viscous_flux_y(U, dom, visc_amp):
+    rho, u, v, p, T, mu, k = cell_centered_fields(U, visc_amp)
+    dudy = np.gradient(u, dom.dy, axis=1)
+    dvdx = np.gradient(v, dom.dx, axis=0)
+    dvdy = np.gradient(v, dom.dy, axis=1)
+    dudx = np.gradient(u, dom.dx, axis=0)
+    dTdy = np.gradient(T, dom.dy, axis=1)
+
+    f = lambda a: 0.5 * (a[:, :-1] + a[:, 1:])
+    u_f, v_f, mu_f, k_f = f(u), f(v), f(mu), f(k)
+    dudy_f, dvdx_f, dvdy_f, dudx_f, dTdy_f = f(dudy), f(dvdx), f(dvdy), f(dudx), f(dTdy)
+
+    tau_xy = mu_f * (dudy_f + dvdx_f)
+    tau_yy = mu_f * (4.0/3.0 * dvdy_f - 2.0/3.0 * dudx_f)
+    qy = k_f * dTdy_f
+
+    Fv = np.zeros((4,) + tau_yy.shape)
+    Fv[1] = tau_xy
+    Fv[2] = tau_yy
+    Fv[3] = u_f * tau_xy + v_f * tau_yy + qy
+    return Fv
+
+
+def residual(U, dom, visc_amp, viscous=True):
+    nx, ny = dom.nx, dom.ny
+    Rres = np.zeros_like(U)
+
+    UL = U[:, :-1, :].reshape(4, -1)
+    UR = U[:, 1:, :].reshape(4, -1)
+    Fx = hllc_flux_x_vec(UL, UR).reshape(4, nx - 1, ny)
+    if viscous:
+        Fx = Fx - viscous_flux_x(U, dom, visc_amp)
+    Rres[:, :-1, :] -= Fx / dom.dx
+    Rres[:, 1:, :] += Fx / dom.dx
+
+    UL = U[:, :, :-1].reshape(4, -1)
+    UR = U[:, :, 1:].reshape(4, -1)
+    Fy = hllc_flux_y_vec(UL, UR).reshape(4, nx, ny - 1)
+    if viscous:
+        Fy = Fy - viscous_flux_y(U, dom, visc_amp)
+    Rres[:, :, :-1] -= Fy / dom.dy
+    Rres[:, :, 1:] += Fy / dom.dy
+
+    return Rres
+
+
+def compute_dt(U, dom, visc_amp, cfl=0.4, viscous=True):
+    rho, u, v, p = cons_to_prim(U)
+    a = np.sqrt(GAMMA * p / rho)
+    dt_conv = cfl / ((np.abs(u)+a).max()/dom.dx + (np.abs(v)+a).max()/dom.dy)
+    if viscous:
+        T = p / (rho * R_GAS)
+        nu = (sutherland_mu(T, visc_amp) / rho).max()
+        dt_visc = 0.4 / (2.0 * nu * (1.0/dom.dx**2 + 1.0/dom.dy**2))
+        return min(dt_conv, dt_visc)
+    return dt_conv
+
+
+# ----------------------------------------------------------------------
+# Simulation
+# ----------------------------------------------------------------------
+def run_simulation(n_steps, nx, ny, Lx, Ly, M_inf, slot_defs, visc_amp,
+                    viscous=True, verbose_every=500):
+    dom = Domain(nx, ny, Lx, Ly)
+    U, freestream = init_freestream(dom, M_inf=M_inf)
+
+    slots = []
+    for k, (x_min, x_max, P0_jet, T0_jet) in enumerate(slot_defs):
+        rho_j, u_j, p_j = choked_jet_exit_state(P0_jet, T0_jet)
+        slots.append(dict(x_min=x_min, x_max=x_max, rho_j=rho_j, u_j=u_j, p_j=p_j))
+        print(f"  Orifice {k+1} (x={x_min*1e3:.2f}-{x_max*1e3:.2f}mm) : "
+              f"p_exit={p_j:.0f} Pa (ratio={p_j/freestream['p_inf']:.2f}), "
+              f"u_exit={u_j:.1f} m/s")
+    jet = dict(slots=slots)
+
+    U = apply_bc(U, dom, freestream, jet)
+    for step in range(n_steps):
+        dt = compute_dt(U, dom, visc_amp, viscous=viscous)
+        U = U + dt * residual(U, dom, visc_amp, viscous=viscous)
+        U = apply_bc(U, dom, freestream, jet)
+        if verbose_every and step % verbose_every == 0:
+            rho, u, v, p = cons_to_prim(U)
+            mach = np.sqrt(u**2+v**2) / np.sqrt(GAMMA*p/rho)
+            print(f"  step {step:4d}  dt={dt:.2e}s  p_max={p.max():.3e} Pa  Mach_max={mach.max():.2f}")
+
+    return U, dom, freestream, jet
+
+
+def numerical_schlieren(rho, dom):
+    drho_dx = np.gradient(rho, dom.dx, axis=0)
+    drho_dy = np.gradient(rho, dom.dy, axis=1)
+    grad_mag = np.sqrt(drho_dx**2 + drho_dy**2)
+    k = 0.15 / (grad_mag.max() + 1e-12)
+    return np.exp(-k * grad_mag)
+
+
+# ----------------------------------------------------------------------
+# Nommage des fichiers de resultats
+# ----------------------------------------------------------------------
+def case_filename(n_jets, spacing_mm=None):
+    if n_jets == 1:
+        return os.path.join(RESULTS_DIR, "case_single.npz")
+    return os.path.join(RESULTS_DIR, f"case_double_{spacing_mm:.2f}mm.npz")
+
+
+# ----------------------------------------------------------------------
+# MODE RUN
+# ----------------------------------------------------------------------
+def cmd_run(args):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    slot_width = args.slot_width_mm * 1e-3
+    x1_min = 3.0e-3
+    x1_max = x1_min + slot_width
+
+    if args.jets == 1:
+        slot_defs = [(x1_min, x1_max, args.p0, args.t0)]
+        Lx = args.lx_mm * 1e-3 if args.lx_mm else 10e-3
+        fname = case_filename(1)
+    else:
+        if args.spacing is None or len(args.spacing) != 1:
+            raise SystemExit("--jets 2 necessite exactement une valeur --spacing pour le mode run")
+        spacing_mm = args.spacing[0]
+        x2_min = x1_min + spacing_mm * 1e-3
+        x2_max = x2_min + slot_width
+        slot_defs = [(x1_min, x1_max, args.p0, args.t0),
+                     (x2_min, x2_max, args.p0, args.t0)]
+        Lx = args.lx_mm * 1e-3 if args.lx_mm else 18e-3
+        fname = case_filename(2, spacing_mm)
+
+    Ly = args.ly_mm * 1e-3
+
+    print(f"=== RUN : {args.jets} jet(s), M_inf={args.minf}, visc_amp={args.visc_amp} ===")
+    U, dom, freestream, jet = run_simulation(
+        n_steps=args.nsteps, nx=args.nx, ny=args.ny, Lx=Lx, Ly=Ly,
+        M_inf=args.minf, slot_defs=slot_defs, visc_amp=args.visc_amp,
+        viscous=not args.inviscid, verbose_every=args.nsteps // 6 or 1,
+    )
+    rho, u, v, p = cons_to_prim(U)
+
+    save_kwargs = dict(rho=rho, u=u, v=v, p=p, x=dom.x, y=dom.y,
+                        p_inf=freestream['p_inf'], n_jets=args.jets,
+                        visc_amp=args.visc_amp, minf=args.minf)
+    for i, slot in enumerate(jet['slots']):
+        save_kwargs[f'slot{i}_xmin'] = slot['x_min']
+        save_kwargs[f'slot{i}_xmax'] = slot['x_max']
+    save_kwargs['n_slots'] = len(jet['slots'])
+
+    np.savez(fname, **save_kwargs)
+    print(f"\nResultat sauvegarde : {fname}")
+
+
+# ----------------------------------------------------------------------
+# MODE VIZ
+# ----------------------------------------------------------------------
+def load_case(n_jets, spacing_mm=None):
+    fname = case_filename(n_jets, spacing_mm)
+    if not os.path.exists(fname):
+        raise SystemExit(f"Fichier introuvable : {fname} -- lance d'abord 'run' pour ce cas.")
+    return np.load(fname)
+
+
+def plot_detailed(d, title_suffix=""):
+    x, y = d['x']*1e3, d['y']*1e3
+    p_norm = d['p'] / d['p_inf']
+    rho, u, v = d['rho'], d['u'], d['v']
+    a = np.sqrt(GAMMA * d['p'] / rho)
+    mach = np.sqrt(u**2 + v**2) / a
+
+    class _Dom:  # mini objet pour reutiliser numerical_schlieren
+        dx = x[1] - x[0]
+        dy = y[1] - y[0]
+    schlieren = numerical_schlieren(rho, _Dom)
+
+    X, Y = np.meshgrid(x, y, indexing='ij')
+    fig, axes = plt.subplots(3, 1, figsize=(9, 11), sharex=True)
+
+    im0 = axes[0].pcolormesh(X, Y, p_norm, shading='auto', cmap='inferno')
+    axes[0].set_title(f'Pression normalisee p/p_inf {title_suffix}')
+    fig.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].pcolormesh(X, Y, mach, shading='auto', cmap='viridis')
+    axes[1].set_title('Nombre de Mach')
+    fig.colorbar(im1, ax=axes[1])
+
+    im2 = axes[2].pcolormesh(X, Y, schlieren, shading='auto', cmap='gray')
+    axes[2].set_title('Schlieren numerique')
+    fig.colorbar(im2, ax=axes[2])
+
+    n_slots = int(d['n_slots'])
+    for ax in axes:
+        for i in range(n_slots):
+            ax.axvspan(d[f'slot{i}_xmin']*1e3, d[f'slot{i}_xmax']*1e3, color='cyan', alpha=0.25)
+        ax.set_ylabel('y [mm]')
+    axes[-1].set_xlabel('x [mm]')
+    plt.tight_layout()
+    return fig
+
+
+def plot_comparison(cases, spacings):
+    fig, axes = plt.subplots(len(cases), 1, figsize=(9, 3.2*len(cases)), sharex=False)
+    if len(cases) == 1:
+        axes = [axes]
+    for ax, d, spacing in zip(axes, cases, spacings):
+        x, y = d['x']*1e3, d['y']*1e3
+        p_norm = d['p'] / d['p_inf']
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        im = ax.pcolormesh(X, Y, p_norm, shading='auto', cmap='inferno', vmin=1, vmax=5.5)
+        n_slots = int(d['n_slots'])
+        for i in range(n_slots):
+            ax.axvspan(d[f'slot{i}_xmin']*1e3, d[f'slot{i}_xmax']*1e3, color='cyan', alpha=0.3)
+        ax.set_title(f"Espacement = {spacing} mm")
+        ax.set_ylabel('y [mm]')
+        fig.colorbar(im, ax=ax, label='p/p_inf')
+    axes[-1].set_xlabel('x [mm]')
+    plt.tight_layout()
+    return fig
+
+
+def cmd_viz(args):
+    if args.jets == 1:
+        d = load_case(1)
+        fig = plot_detailed(d, title_suffix="(1 jet)")
+        out = os.path.join(RESULTS_DIR, "viz_single.png")
+        fig.savefig(out, dpi=150)
+        print(f"Figure sauvegardee : {out}")
+        return
+
+    if args.spacing is None or len(args.spacing) == 0:
+        raise SystemExit("--jets 2 necessite au moins une valeur --spacing pour viz")
+
+    if len(args.spacing) == 1 and not args.compare:
+        d = load_case(2, args.spacing[0])
+        fig = plot_detailed(d, title_suffix=f"(2 jets, espacement={args.spacing[0]}mm)")
+        out = os.path.join(RESULTS_DIR, f"viz_double_{args.spacing[0]:.2f}mm.png")
+        fig.savefig(out, dpi=150)
+        print(f"Figure sauvegardee : {out}")
+        return
+
+    # Comparaison multi-espacements
+    cases = [load_case(2, s) for s in args.spacing]
+    fig = plot_comparison(cases, args.spacing)
+    out = os.path.join(RESULTS_DIR, "viz_comparison.png")
+    fig.savefig(out, dpi=150)
+    print(f"Figure sauvegardee : {out}")
+
+
+# ----------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    common = dict()
+
+    p_run = sub.add_parser("run", help="Calculer un cas et le sauvegarder")
+    p_run.add_argument("--jets", type=int, choices=[1, 2], default=1)
+    p_run.add_argument("--spacing", type=float, nargs="*", default=None,
+                        help="Espacement (mm) entre les 2 orifices -- une seule valeur en mode run")
+    p_run.add_argument("--p0", type=float, default=6.0e5, help="Pression plenum jet [Pa]")
+    p_run.add_argument("--t0", type=float, default=300.0, help="Temperature plenum jet [K]")
+    p_run.add_argument("--minf", type=float, default=2.5, help="Mach de l'ecoulement transverse")
+    p_run.add_argument("--slot-width-mm", type=float, default=0.5, dest="slot_width_mm")
+    p_run.add_argument("--visc-amp", type=float, default=40.0, dest="visc_amp",
+                        help="Facteur d'amplification numerique de la viscosite (pedagogique)")
+    p_run.add_argument("--inviscid", action="store_true", help="Desactive la viscosite (Euler pur)")
+    p_run.add_argument("--nx", type=int, default=500)
+    p_run.add_argument("--ny", type=int, default=180)
+    p_run.add_argument("--nsteps", type=int, default=2500)
+    p_run.add_argument("--lx-mm", type=float, default=None, dest="lx_mm")
+    p_run.add_argument("--ly-mm", type=float, default=4.0, dest="ly_mm")
+    p_run.set_defaults(func=cmd_run)
+
+    p_viz = sub.add_parser("viz", help="Visualiser un ou plusieurs cas deja calcules")
+    p_viz.add_argument("--jets", type=int, choices=[1, 2], default=2)
+    p_viz.add_argument("--spacing", type=float, nargs="*", default=None,
+                        help="Une valeur = plot detaille ; plusieurs = comparaison")
+    p_viz.add_argument("--compare", action="store_true",
+                        help="Forcer le mode comparaison meme avec une seule valeur")
+    p_viz.set_defaults(func=cmd_viz)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
 
 
 
