@@ -1,3 +1,714 @@
+"""
+jisc_tool.py -- Outil unifie pour l'etude d'injection(s) en ecoulement
+transverse supersonique (Euler+Navier-Stokes, HLLC + Scalaires Passifs).
+
+Trois modes :
+
+  MODE RUN  -- calcule un cas et sauvegarde le resultat
+      python jisc_tool.py run --jets 2 --spacing 2.0 --p0 5e5 15e5 --slot-width-mm 0.2 0.5
+
+  MODE VIZ  -- charge un resultat sauvegarde et l'affiche (inclut les traceurs)
+      python jisc_tool.py viz --jets 2 --spacing 2.0
+
+  MODE ANIM -- genere un film (Schlieren ou Traceurs RGB)
+      python jisc_tool.py anim --jets 2 --spacing 2.0 --anim-mode tracer
+
+Ameliorations :
+  - Traceurs massiques Y1 et Y2 pour analyser le melange independant des jets.
+  - Possibilite de desymetriser les injecteurs (pressions et tailles differentes).
+"""
+
+import argparse
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+# ----------------------------------------------------------------------
+# Constantes physiques + base de donnees especes (pour melange gaz1/gaz2)
+# ----------------------------------------------------------------------
+R_UNIV = 8.314462618  # J/(mol.K)
+PRANDTL = 0.71
+SUTH_MU0 = 1.716e-5
+SUTH_T0 = 273.15
+SUTH_S = 110.4
+
+RESULTS_DIR = "jisc_results"
+
+# (gamma, masse molaire [kg/mol]) -- presets courants pour un jet
+GAS_PRESETS = {
+    "air":      (1.400, 28.97e-3),
+    "helium":   (1.667, 4.003e-3),
+    "hydrogen": (1.405, 2.016e-3),
+    "co2":      (1.289, 44.01e-3),
+    "argon":    (1.667, 39.95e-3),
+    "n2":       (1.400, 28.01e-3),
+}
+
+AIR_GAMMA, AIR_M = GAS_PRESETS["air"]
+AIR_R = R_UNIV / AIR_M
+AIR_CP = AIR_GAMMA * AIR_R / (AIR_GAMMA - 1.0)
+# Retro-compatibilite (code plus bas utilise encore GAMMA/R_GAS pour l'air pur)
+GAMMA = AIR_GAMMA
+R_GAS = AIR_R
+CP = AIR_CP
+
+# Proprietes des gaz injectes (Jet 1 / Jet 2) -- fixees par setup_gases(),
+# par defaut air/air (= comportement identique a la version precedente).
+GAS1_GAMMA, GAS1_M, GAS1_R, GAS1_CP = AIR_GAMMA, AIR_M, AIR_R, AIR_CP
+GAS2_GAMMA, GAS2_M, GAS2_R, GAS2_CP = AIR_GAMMA, AIR_M, AIR_R, AIR_CP
+
+
+def setup_gases(name1, name2):
+    """Fixe les proprietes des especes injectees (globales, utilisees par
+    tout le solveur). A appeler une fois avant run_simulation."""
+    global GAS1_GAMMA, GAS1_M, GAS1_R, GAS1_CP
+    global GAS2_GAMMA, GAS2_M, GAS2_R, GAS2_CP
+    g1, m1 = GAS_PRESETS[name1]
+    g2, m2 = GAS_PRESETS[name2]
+    GAS1_GAMMA, GAS1_M = g1, m1
+    GAS1_R = R_UNIV / m1
+    GAS1_CP = g1 * GAS1_R / (g1 - 1.0)
+    GAS2_GAMMA, GAS2_M = g2, m2
+    GAS2_R = R_UNIV / m2
+    GAS2_CP = g2 * GAS2_R / (g2 - 1.0)
+    print(f"  Gaz jet 1 = {name1} (gamma={g1:.3f}, M={m1*1e3:.2f} g/mol, R={GAS1_R:.1f} J/kg/K)")
+    print(f"  Gaz jet 2 = {name2} (gamma={g2:.3f}, M={m2*1e3:.2f} g/mol, R={GAS2_R:.1f} J/kg/K)")
+
+
+def mixture_props(Y1, Y2):
+    """gamma_mix et R_mix locaux a partir des fractions massiques Y1,Y2
+    (Y0 = 1-Y1-Y2 = air/ecoulement porteur). Melange ideal : R_mix et
+    cp_mix sont des moyennes ponderees en masse (exact pour gaz parfaits),
+    gamma_mix = cp_mix/cv_mix en decoule."""
+    Y1c = np.clip(Y1, 0.0, 1.0)
+    Y2c = np.clip(Y2, 0.0, 1.0 - Y1c)
+    Y0c = 1.0 - Y1c - Y2c
+    R_mix = Y0c * AIR_R + Y1c * GAS1_R + Y2c * GAS2_R
+    cp_mix = Y0c * AIR_CP + Y1c * GAS1_CP + Y2c * GAS2_CP
+    cv_mix = cp_mix - R_mix
+    gamma_mix = cp_mix / cv_mix
+    return gamma_mix, R_mix
+
+
+def sutherland_mu(T):
+    return SUTH_MU0 * (T / SUTH_T0)**1.5 * (SUTH_T0 + SUTH_S) / (T + SUTH_S)
+
+def cons_to_prim(U):
+    """Retourne (rho,u,v,p,gamma_mix,R_mix) -- gamma et R sont maintenant
+    des CHAMPS LOCAUX calcules a partir des traceurs Y1=U[4]/rho, Y2=U[5]/rho,
+    et non plus des constantes globales."""
+    rho = U[0]
+    u = U[1] / rho
+    v = U[2] / rho
+    E = U[3]
+    Y1 = U[4] / rho
+    Y2 = U[5] / rho
+    gamma_mix, R_mix = mixture_props(Y1, Y2)
+    p = (gamma_mix - 1.0) * (E - 0.5 * rho * (u**2 + v**2))
+    p = np.maximum(p, 1e-6)
+    return rho, u, v, p, gamma_mix, R_mix
+
+def prim_to_cons(rho, u, v, p, Y1=0.0, Y2=0.0):
+    """Construit l'etat conservatif a partir de (rho,u,v,p) ET de la
+    composition (Y1,Y2) -- l'energie interne depend du gamma LOCAL de
+    cette composition, pas d'un gamma global."""
+    gamma_mix, _ = mixture_props(Y1, Y2)
+    E = p / (gamma_mix - 1.0) + 0.5 * rho * (u**2 + v**2)
+    return np.array([rho, rho * u, rho * v, E, rho * Y1, rho * Y2])
+
+def flux_x(U):
+    rho, u, v, p, gamma_mix, R_mix = cons_to_prim(U)
+    E = U[3]
+    F = np.zeros_like(U)
+    F[0] = rho * u
+    F[1] = rho * u**2 + p
+    F[2] = rho * u * v
+    F[3] = u * (E + p)
+    F[4] = U[4] * u
+    F[5] = U[5] * u
+    return F
+
+def hllc_flux_x_vec(UL, UR):
+    rhoL, uL, vL, pL, gammaL, _ = cons_to_prim(UL)
+    rhoR, uR, vR, pR, gammaR, _ = cons_to_prim(UR)
+    aL = np.sqrt(gammaL * pL / rhoL)
+    aR = np.sqrt(gammaR * pR / rhoR)
+
+    SL = np.minimum(uL - aL, uR - aR)
+    SR = np.maximum(uL + aL, uR + aR)
+
+    FL = flux_x(UL)
+    FR = flux_x(UR)
+
+    denom = rhoL * (SL - uL) - rhoR * (SR - uR)
+    denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+    SM = (pR - pL + rhoL * uL * (SL - uL) - rhoR * uR * (SR - uR)) / denom
+
+    denomL = np.where(np.abs(SL - SM) < 1e-12, 1e-12, SL - SM)
+    pStarL = pL + rhoL * (uL - SL) * (uL - SM)
+    rhoStarL = rhoL * (SL - uL) / denomL
+    EStarL = ((SL - uL) * UL[3] - pL * uL + pStarL * SM) / denomL
+    
+    UStarL = np.zeros_like(UL)
+    UStarL[0:4] = [rhoStarL, rhoStarL * SM, rhoStarL * vL, EStarL]
+    
+    denomR = np.where(np.abs(SR - SM) < 1e-12, 1e-12, SR - SM)
+    pStarR = pR + rhoR * (uR - SR) * (uR - SM)
+    rhoStarR = rhoR * (SR - uR) / denomR
+    EStarR = ((SR - uR) * UR[3] - pR * uR + pStarR * SM) / denomR
+    
+    UStarR = np.zeros_like(UR)
+    UStarR[0:4] = [rhoStarR, rhoStarR * SM, rhoStarR * vR, EStarR]
+    
+    # Traceurs passifs
+    for k in range(4, 6):
+        UStarL[k] = rhoStarL * (UL[k] / rhoL)
+        UStarR[k] = rhoStarR * (UR[k] / rhoR)
+
+    F_starL = FL + SL * (UStarL - UL)
+    F_starR = FR + SR * (UStarR - UR)
+
+    mask_L = SL >= 0
+    mask_R = SR <= 0
+    mask_starL = (~mask_L) & (~mask_R) & (SM >= 0)
+
+    F = np.zeros_like(FL)
+    for k in range(6):
+        F[k] = np.where(mask_L, FL[k],
+                np.where(mask_R, FR[k],
+                np.where(mask_starL, F_starL[k], F_starR[k])))
+    return F
+
+def hllc_flux_y_vec(UL, UR):
+    def swap(U):
+        U_s = np.copy(U)
+        U_s[1] = U[2]
+        U_s[2] = U[1]
+        return U_s
+    F = hllc_flux_x_vec(swap(UL), swap(UR))
+    return swap(F)
+
+
+class Domain:
+    def __init__(self, nx, ny, Lx, Ly):
+        self.nx, self.ny = nx, ny
+        self.Lx, self.Ly = Lx, Ly
+        self.dx = Lx / nx
+        self.dy = Ly / ny
+        self.x = (np.arange(nx) + 0.5) * self.dx
+        self.y = (np.arange(ny) + 0.5) * self.dy
+
+def init_freestream(dom, M_inf, p_inf=101325.0, T_inf=250.0):
+    # Ecoulement porteur = air pur (Y1=Y2=0)
+    rho_inf = p_inf / (AIR_R * T_inf)
+    a_inf = np.sqrt(AIR_GAMMA * AIR_R * T_inf)
+    u_inf = M_inf * a_inf
+    U = np.zeros((6, dom.nx, dom.ny))
+    U[0] = rho_inf
+    U[1] = rho_inf * u_inf
+    U[3] = p_inf / (AIR_GAMMA - 1) + 0.5 * rho_inf * u_inf**2
+    # Traceurs initialises a 0
+    return U, dict(rho_inf=rho_inf, u_inf=u_inf, p_inf=p_inf, a_inf=a_inf, T_inf=T_inf)
+
+def choked_jet_exit_state(P0_jet, T0_jet, gamma_j, R_j):
+    """Ecoulement isentropique choque (M=1) -- utilise les proprietes
+    PROPRES du gaz injecte (gamma_j, R_j), pas celles de l'air."""
+    ratio_p = (2.0 / (gamma_j + 1.0)) ** (gamma_j / (gamma_j - 1.0))
+    ratio_T = 2.0 / (gamma_j + 1.0)
+    p_exit = P0_jet * ratio_p
+    T_exit = T0_jet * ratio_T
+    rho_exit = p_exit / (R_j * T_exit)
+    u_exit = np.sqrt(gamma_j * R_j * T_exit)
+    return rho_exit, u_exit, p_exit
+
+def apply_bc(U, dom, freestream, jet):
+    rho_inf, u_inf, p_inf = freestream['rho_inf'], freestream['u_inf'], freestream['p_inf']
+    
+    # Entree : air pur
+    U[0, 0, :] = rho_inf
+    U[1, 0, :] = rho_inf * u_inf
+    U[2, 0, :] = 0.0
+    U[3, 0, :] = p_inf / (AIR_GAMMA - 1) + 0.5 * rho_inf * u_inf**2
+    U[4:, 0, :] = 0.0
+
+    # Sortie et Haut
+    U[:, -1, :] = U[:, -2, :]
+    U[:, :, -1] = U[:, :, -2]
+
+    # Paroi : non-glissement, on mirroir la composition (Y1,Y2) de la
+    # cellule interieure pour que le gamma local reste coherent
+    j_wall = 0
+    Y1_int = U[4, :, 1] / U[0, :, 1]
+    Y2_int = U[5, :, 1] / U[0, :, 1]
+    rho_w, u_w, v_w, p_w, _, _ = cons_to_prim(U[:, :, 1])
+    U[0:4, :, j_wall] = prim_to_cons(rho_w, -u_w, -v_w, p_w, Y1_int, Y2_int)[0:4]
+    U[4:, :, j_wall] = U[4:, :, 1]  # Gradient nul pour les traceurs
+
+    # Injecteurs -- chaque jet garde son propre gamma/R via slot['gamma_j']/['R_j']
+    for k, slot in enumerate(jet['slots']):
+        in_slot = (dom.x >= slot['x_min']) & (dom.x <= slot['x_max'])
+        rho_j, u_j, p_j = slot['rho_j'], slot['u_j'], slot['p_j']
+        gamma_j = slot['gamma_j']
+        E_j = p_j / (gamma_j - 1) + 0.5 * rho_j * u_j**2
+        U[0, in_slot, j_wall] = rho_j
+        U[1, in_slot, j_wall] = 0.0
+        U[2, in_slot, j_wall] = rho_j * u_j
+        U[3, in_slot, j_wall] = E_j
+        U[4:, in_slot, j_wall] = 0.0
+        U[4+k, in_slot, j_wall] = rho_j * 1.0 # 100% de concentration pour ce traceur
+
+    return U
+
+
+def cell_centered_fields(U, dom, turb):
+    rho, u, v, p, gamma_mix, R_mix = cons_to_prim(U)
+    T = p / (rho * R_mix)
+    cp_mix = gamma_mix * R_mix / (gamma_mix - 1.0)
+    mu_lam = sutherland_mu(T)
+    k_lam = mu_lam * cp_mix / PRANDTL
+
+    if turb == 'smagorinsky':
+        Cs, kappa = 0.17, 0.41
+        delta = np.sqrt(dom.dx * dom.dy)
+        dudx, dudy = np.gradient(u, dom.dx, axis=0), np.gradient(u, dom.dy, axis=1)
+        dvdx, dvdy = np.gradient(v, dom.dx, axis=0), np.gradient(v, dom.dy, axis=1)
+        Sxx, Syy, Sxy = dudx, dvdy, 0.5 * (dudy + dvdx)
+        S_mag = np.sqrt(2.0 * (Sxx**2 + Syy**2 + 2.0*Sxy**2))
+        l_mix = np.minimum(kappa * dom.y[None, :], Cs * delta)
+        mu_t = rho * l_mix**2 * S_mag
+        k_t = mu_t * cp_mix / 0.9
+    else:
+        mu_t, k_t = 0.0, 0.0
+
+    return rho, u, v, p, T, mu_lam + mu_t, k_lam + k_t
+
+
+def viscous_flux_x(U, dom, turb):
+    rho, u, v, p, T, mu, k = cell_centered_fields(U, dom, turb)
+    dudx, dudy = np.gradient(u, dom.dx, axis=0), np.gradient(u, dom.dy, axis=1)
+    dvdx, dvdy = np.gradient(v, dom.dx, axis=0), np.gradient(v, dom.dy, axis=1)
+    dTdx = np.gradient(T, dom.dx, axis=0)
+
+    f = lambda a: 0.5 * (a[:-1, :] + a[1:, :])
+    u_f, v_f, mu_f, k_f = f(u), f(v), f(mu), f(k)
+    tau_xx = mu_f * (4.0/3.0 * f(dudx) - 2.0/3.0 * f(dvdy))
+    tau_xy = mu_f * (f(dudy) + f(dvdx))
+    
+    Fv = np.zeros((6,) + tau_xx.shape)
+    Fv[1], Fv[2] = tau_xx, tau_xy
+    Fv[3] = u_f * tau_xx + v_f * tau_xy + k_f * f(dTdx)
+    
+    mu_sc_f = mu_f / 0.9
+    for i in (4, 5):
+        dYdx = np.gradient(U[i]/rho, dom.dx, axis=0)
+        Fv[i] = mu_sc_f * f(dYdx)
+    return Fv
+
+def viscous_flux_y(U, dom, turb):
+    rho, u, v, p, T, mu, k = cell_centered_fields(U, dom, turb)
+    dudx, dudy = np.gradient(u, dom.dx, axis=0), np.gradient(u, dom.dy, axis=1)
+    dvdx, dvdy = np.gradient(v, dom.dx, axis=0), np.gradient(v, dom.dy, axis=1)
+    dTdy = np.gradient(T, dom.dy, axis=1)
+
+    f = lambda a: 0.5 * (a[:, :-1] + a[:, 1:])
+    u_f, v_f, mu_f, k_f = f(u), f(v), f(mu), f(k)
+    tau_xy = mu_f * (f(dudy) + f(dvdx))
+    tau_yy = mu_f * (4.0/3.0 * f(dvdy) - 2.0/3.0 * f(dudx))
+    
+    Fv = np.zeros((6,) + tau_yy.shape)
+    Fv[1], Fv[2] = tau_xy, tau_yy
+    Fv[3] = u_f * tau_xy + v_f * tau_yy + k_f * f(dTdy)
+    
+    mu_sc_f = mu_f / 0.9
+    for i in (4, 5):
+        dYdy = np.gradient(U[i]/rho, dom.dy, axis=1)
+        Fv[i] = mu_sc_f * f(dYdy)
+    return Fv
+
+
+def residual(U, dom, turb, viscous=True):
+    nx, ny = dom.nx, dom.ny
+    Rres = np.zeros_like(U)
+
+    UL, UR = U[:, :-1, :].reshape(6, -1), U[:, 1:, :].reshape(6, -1)
+    Fx = hllc_flux_x_vec(UL, UR).reshape(6, nx - 1, ny)
+    if viscous: Fx -= viscous_flux_x(U, dom, turb)
+    Rres[:, :-1, :] -= Fx / dom.dx
+    Rres[:, 1:, :] += Fx / dom.dx
+
+    UL, UR = U[:, :, :-1].reshape(6, -1), U[:, :, 1:].reshape(6, -1)
+    Fy = hllc_flux_y_vec(UL, UR).reshape(6, nx, ny - 1)
+    if viscous: Fy -= viscous_flux_y(U, dom, turb)
+    Rres[:, :, :-1] -= Fy / dom.dy
+    Rres[:, :, 1:] += Fy / dom.dy
+    return Rres
+
+def compute_dt(U, dom, turb, cfl=0.4, viscous=True):
+    rho, u, v, p, gamma_mix, R_mix = cons_to_prim(U)
+    a = np.sqrt(gamma_mix * p / rho)
+    dt_conv = cfl / ((np.abs(u)+a).max()/dom.dx + (np.abs(v)+a).max()/dom.dy)
+    if viscous:
+        _, _, _, _, _, mu_eff, _ = cell_centered_fields(U, dom, turb)
+        dt_visc = 0.4 / (2.0 * (mu_eff/rho).max() * (1.0/dom.dx**2 + 1.0/dom.dy**2))
+        return min(dt_conv, dt_visc)
+    return dt_conv
+
+
+def run_simulation(n_steps, nx, ny, Lx, Ly, M_inf, slot_defs, turb,
+                    viscous=True, n_frames=50, verbose_every=500):
+    dom = Domain(nx, ny, Lx, Ly)
+    U, freestream = init_freestream(dom, M_inf=M_inf)
+
+    slots = []
+    for k, (x_min, x_max, P0_jet, T0_jet) in enumerate(slot_defs):
+        gamma_j = GAS1_GAMMA if k == 0 else GAS2_GAMMA
+        R_j = GAS1_R if k == 0 else GAS2_R
+        rho_j, u_j, p_j = choked_jet_exit_state(P0_jet, T0_jet, gamma_j, R_j)
+        slots.append(dict(x_min=x_min, x_max=x_max, rho_j=rho_j, u_j=u_j, p_j=p_j,
+                           gamma_j=gamma_j, R_j=R_j))
+        print(f"  Orifice {k+1} (x={x_min*1e3:.2f}-{x_max*1e3:.2f}mm) : "
+              f"p_exit={p_j:.0f} Pa, u_exit={u_j:.1f} m/s, rho_exit={rho_j:.3f} kg/m3")
+    jet = dict(slots=slots)
+
+    U = apply_bc(U, dom, freestream, jet)
+    history_U = []
+    save_freq = max(1, n_steps // n_frames) if n_frames > 0 else 0
+
+    for step in range(n_steps):
+        dt = compute_dt(U, dom, turb, viscous=viscous)
+        U = U + dt * residual(U, dom, turb, viscous=viscous)
+        U = apply_bc(U, dom, freestream, jet)
+        
+        if save_freq > 0 and step % save_freq == 0:
+            history_U.append(U.copy())
+            
+        if verbose_every and step % verbose_every == 0:
+            rho, u, v, p, gamma_mix, R_mix = cons_to_prim(U)
+            print(f"  step {step:4d}  dt={dt:.2e}s  p_max={p.max():.3e} Pa")
+
+    if save_freq > 0 and (n_steps-1) % save_freq != 0:
+        history_U.append(U.copy())
+
+    return U, dom, freestream, jet, history_U
+
+
+def numerical_schlieren(rho, dom):
+    drho_dx = np.gradient(rho, dom.dx, axis=0)
+    drho_dy = np.gradient(rho, dom.dy, axis=1)
+    return np.sqrt(drho_dx**2 + drho_dy**2)
+
+
+def mixing_efficiency_profile(Y, y_min_presence=0.02):
+    """Indice de melange de Danckwerts, calcule par tranche verticale (a
+    chaque x). Purement post-traitement -- n'utilise que le champ Y deja
+    resolu par le solveur (Y1, Y2, ou Y0=1-Y1-Y2 pour le gaz porteur).
+
+    eta(x) = 1 - <Y'^2>_y / (Ybar*(1-Ybar))
+    0 = totalement segregue (Y ne vaut que 0 ou 1 sur cette tranche)
+    1 = parfaitement melange (Y uniforme sur cette tranche)
+
+    NaN la ou Ybar n'est pas dans [y_min_presence, 1-y_min_presence] --
+    c-a-d une zone quasi-pure (pas encore atteinte par l'un des deux
+    fluides). Sans ce filtre, une zone jamais touchee par l'injection
+    (Y=1 partout, homogene par definition) ressortirait a eta=1
+    ("parfaitement melangee"), ce qui est vrai au sens strict mais
+    trompeur physiquement -- ce n'est pas du melange, juste l'absence
+    de l'un des deux fluides.
+    """
+    Ybar = Y.mean(axis=1)
+    var = ((Y - Ybar[:, None])**2).mean(axis=1)
+    var_max = Ybar * (1.0 - Ybar)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        eta = 1.0 - var / var_max
+    meaningful = (Ybar > y_min_presence) & (Ybar < 1.0 - y_min_presence)
+    eta = np.where(meaningful, eta, np.nan)
+    return eta
+
+
+def mixing_efficiency_global(Y, y_min_presence=0.02):
+    """Version scalaire (tout le domaine d'un coup) du meme indice --
+    ne prend en compte que les cellules ou les deux fluides sont
+    presents en quantite significative (meme filtre que le profil)."""
+    mask = (Y > y_min_presence) & (Y < 1.0 - y_min_presence)
+    if mask.sum() < 10:
+        return np.nan
+    Ysub = Y[mask]
+    Ybar = Ysub.mean()
+    var = ((Ysub - Ybar)**2).mean()
+    var_max = Ybar * (1.0 - Ybar)
+    if var_max < 1e-9:
+        return np.nan
+    return 1.0 - var / var_max
+
+
+def case_filename(n_jets, spacing_mm=None, tag=""):
+    if n_jets == 1:
+        return os.path.join(RESULTS_DIR, f"case_single{tag}.npz")
+    return os.path.join(RESULTS_DIR, f"case_double_{spacing_mm:.2f}mm{tag}.npz")
+
+
+def cmd_run(args):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    setup_gases(args.gas1, args.gas2)
+
+    p0_list = args.p0 if len(args.p0) >= args.jets else args.p0 * args.jets
+    w_list = args.slot_width_mm if len(args.slot_width_mm) >= args.jets else args.slot_width_mm * args.jets
+
+    x1_min = 3.0e-3
+    x1_max = x1_min + w_list[0] * 1e-3
+    slot_defs = [(x1_min, x1_max, p0_list[0], args.t0)]
+    Lx = args.lx_mm * 1e-3 if args.lx_mm else (10e-3 if args.jets==1 else 18e-3)
+    
+    if args.jets == 2:
+        if not args.spacing: raise SystemExit("--jets 2 necessite --spacing")
+        spacing_mm = args.spacing[0]
+        x2_min = x1_min + spacing_mm * 1e-3
+        x2_max = x2_min + w_list[1] * 1e-3
+        slot_defs.append((x2_min, x2_max, p0_list[1], args.t0))
+        fname = case_filename(2, spacing_mm, tag=args.tag)
+    else:
+        fname = case_filename(1, tag=args.tag)
+
+    Ly = args.ly_mm * 1e-3
+
+    print(f"=== RUN : {args.jets} jet(s) ===")
+    U, dom, freestream, jet, history_U = run_simulation(
+        n_steps=args.nsteps, nx=args.nx, ny=args.ny, Lx=Lx, Ly=Ly,
+        M_inf=args.minf, slot_defs=slot_defs, turb=args.turb,
+        viscous=not args.inviscid, n_frames=args.nframes,
+        verbose_every=args.nsteps // 6 or 1,
+    )
+    rho, u, v, p, gamma_mix, R_mix = cons_to_prim(U)
+
+    save_kwargs = dict(rho=rho, u=u, v=v, p=p, Y1=U[4]/rho, Y2=U[5]/rho, 
+                        x=dom.x, y=dom.y, p_inf=freestream['p_inf'], 
+                        n_jets=args.jets, turb=args.turb, minf=args.minf,
+                        gas1_name=args.gas1, gas2_name=args.gas2,
+                        gas1_gamma=GAS1_GAMMA, gas1_R=GAS1_R,
+                        gas2_gamma=GAS2_GAMMA, gas2_R=GAS2_R)
+                        
+    if history_U: save_kwargs['history_U'] = np.stack(history_U, axis=0)
+        
+    for i, slot in enumerate(jet['slots']):
+        save_kwargs[f'slot{i}_xmin'] = slot['x_min']
+        save_kwargs[f'slot{i}_xmax'] = slot['x_max']
+    save_kwargs['n_slots'] = len(jet['slots'])
+
+    np.savez_compressed(fname, **save_kwargs)
+    print(f"\nResultat sauvegarde : {fname}")
+
+
+def load_case(n_jets, spacing_mm=None, tag=""):
+    fname = case_filename(n_jets, spacing_mm, tag)
+    if not os.path.exists(fname): raise SystemExit(f"Fichier introuvable : {fname}")
+    return np.load(fname)
+
+
+def plot_detailed(d, title_suffix=""):
+    x, y = d['x']*1e3, d['y']*1e3
+    p_norm = d['p'] / d['p_inf']
+    rho, u, v = d['rho'], d['u'], d['v']
+    Y1, Y2 = d['Y1'], d.get('Y2', np.zeros_like(d['Y1']))
+
+    # Reconstruit gamma_mix localement depuis les metadata du gaz sauvegardees
+    # (independant de l'etat global du module -- correct meme si un autre
+    # cas avec d'autres gaz a ete charge dans le meme process auparavant)
+    g1, g2 = float(d.get('gas1_gamma', AIR_GAMMA)), float(d.get('gas2_gamma', AIR_GAMMA))
+    Y1c = np.clip(Y1, 0, 1); Y2c = np.clip(Y2, 0, 1 - Y1c); Y0c = 1 - Y1c - Y2c
+    cp1 = g1 * float(d.get('gas1_R', AIR_R)) / (g1 - 1.0)
+    cp2 = g2 * float(d.get('gas2_R', AIR_R)) / (g2 - 1.0)
+    R_mix = Y0c * AIR_R + Y1c * float(d.get('gas1_R', AIR_R)) + Y2c * float(d.get('gas2_R', AIR_R))
+    cp_mix = Y0c * AIR_CP + Y1c * cp1 + Y2c * cp2
+    gamma_mix = cp_mix / (cp_mix - R_mix)
+
+    mach = np.sqrt(u**2 + v**2) / np.sqrt(gamma_mix * d['p'] / rho)
+
+    class _Dom: dx, dy = x[1] - x[0], y[1] - y[0]
+    schlieren = numerical_schlieren(rho, _Dom)
+    vorticity = np.gradient(v, x*1e-3, axis=0) - np.gradient(u, y*1e-3, axis=1)
+    
+    X, Y = np.meshgrid(x, y, indexing='ij')
+    n_plots = 5 + int(d['n_slots'])
+    fig, axes = plt.subplots(n_plots, 1, figsize=(10, 3.5 * n_plots), sharex=True)
+
+    im0 = axes[0].pcolormesh(X, Y, p_norm, shading='auto', cmap='inferno', vmin=0.5, vmax=np.percentile(p_norm, 98))
+    axes[0].set_title(f'Pression p/p_inf {title_suffix}')
+    
+    im1 = axes[1].pcolormesh(X, Y, mach, shading='auto', cmap='viridis', vmin=0, vmax=d.get('minf', 2.5))
+    axes[1].set_title('Mach')
+
+    im2 = axes[2].pcolormesh(X, Y, schlieren, shading='auto', cmap='gray_r', vmin=0, vmax=np.percentile(schlieren, 92))
+    axes[2].set_title('Schlieren')
+    
+    v_lim = np.percentile(np.abs(vorticity), 95)
+    im3 = axes[3].pcolormesh(X, Y, vorticity, shading='auto', cmap='RdBu_r', vmin=-v_lim, vmax=v_lim)
+    axes[3].set_title('Vorticite')
+    
+    axes[4].pcolormesh(X, Y, Y1, shading='auto', cmap='Reds', vmin=0, vmax=1)
+    axes[4].set_title('Melange - Traceur Jet 1 (Rouge)')
+    
+    if n_plots == 7:
+        axes[5].pcolormesh(X, Y, Y2, shading='auto', cmap='Blues', vmin=0, vmax=1)
+        axes[5].set_title('Melange - Traceur Jet 2 (Bleu)')
+
+        overlap = np.minimum(Y1, Y2)
+        im6 = axes[6].pcolormesh(X, Y, overlap, shading='auto', cmap='Purples', vmin=0, vmax=overlap.max() + 1e-9)
+        frac = (overlap > 0.05).sum() / overlap.size * 100
+        axes[6].set_title(f"Recouvrement min(Y1,Y2) -- interaction reelle "
+                           f"(max={overlap.max():.2f}, {frac:.1f}% du domaine >0.05)")
+
+    for ax in axes:
+        for i in range(int(d['n_slots'])):
+            ax.axvspan(d[f'slot{i}_xmin']*1e3, d[f'slot{i}_xmax']*1e3, color='cyan', alpha=0.3)
+        ax.set_ylabel('y [mm]')
+    axes[-1].set_xlabel('x [mm]')
+    plt.tight_layout()
+    return fig
+
+
+def cmd_viz(args):
+    d = load_case(args.jets, args.spacing[0] if args.spacing else None, args.tag)
+    fig = plot_detailed(d)
+    out = case_filename(args.jets, args.spacing[0] if args.spacing else None, args.tag).replace('.npz', '_viz.png')
+    fig.savefig(out, dpi=150)
+    print(f"Figure sauvegardee : {out}")
+
+
+def cmd_anim(args):
+    d = load_case(args.jets, args.spacing[0] if args.spacing else None, args.tag)
+    hist_U = d['history_U']
+    n_frames = hist_U.shape[0]
+    
+    fig, ax = plt.subplots(figsize=(10, 4))
+    x, y = d['x']*1e3, d['y']*1e3
+    X, Y = np.meshgrid(x, y, indexing='ij')
+
+    if args.anim_mode == 'schlieren':
+        class _Dom: dx, dy = x[1]-x[0], y[1]-y[0]
+        sch_init = numerical_schlieren(hist_U[0, 0], _Dom)
+        im = ax.pcolormesh(X, Y, sch_init, shading='auto', cmap='gray_r', vmin=0, vmax=np.percentile(sch_init, 95))
+    else:
+        im = ax.imshow(np.ones((len(y), len(x), 3)), origin='lower', extent=[x[0], x[-1], y[0], y[-1]], aspect='auto')
+
+    title = ax.set_title("")
+    for i in range(int(d['n_slots'])):
+        ax.axvspan(d[f'slot{i}_xmin']*1e3, d[f'slot{i}_xmax']*1e3, color='cyan', alpha=0.3)
+    plt.tight_layout()
+
+    def update(frame):
+        U = hist_U[frame]
+        if args.anim_mode == 'schlieren':
+            sch = numerical_schlieren(U[0], _Dom)
+            im.set_array(sch.ravel())
+        else:
+            Y1, Y2 = U[4]/U[0], U[5]/U[0]
+            R, G, B = np.ones_like(Y1), np.ones_like(Y1), np.ones_like(Y1)
+            G -= Y1; B -= Y1
+            R -= Y2; G -= Y2
+            img = np.stack([np.clip(R, 0, 1), np.clip(G, 0, 1), np.clip(B, 0, 1)], axis=-1)
+            im.set_data(img.transpose(1, 0, 2))
+            
+        title.set_text(f"Mode: {args.anim_mode} - Frame {frame+1}/{n_frames}")
+        return [im, title]
+
+    anim = animation.FuncAnimation(fig, update, frames=n_frames, blit=False)
+    out_fname = case_filename(args.jets, args.spacing[0] if args.spacing else None, args.tag).replace('.npz', f'_{args.anim_mode}.mp4')
+    try:
+        anim.save(out_fname, writer='ffmpeg', fps=15)
+    except:
+        out_fname = out_fname.replace('.mp4', '.gif')
+        anim.save(out_fname, writer=animation.PillowWriter(fps=15))
+    print(f"Film sauvegarde : {out_fname}")
+
+
+def cmd_mixing(args):
+    d = load_case(args.jets, args.spacing[0] if args.spacing else None, args.tag)
+    x = d['x'] * 1e3
+    Y1, Y2 = d['Y1'], d.get('Y2', np.zeros_like(d['Y1']))
+    Y0 = 1.0 - Y1 - Y2  # gaz porteur (calcule ici, en post-traitement -- Option 1)
+
+    eta1 = mixing_efficiency_profile(Y1)
+    eta0 = mixing_efficiency_profile(Y0)
+    g1 = mixing_efficiency_global(Y1)
+    g0 = mixing_efficiency_global(Y0)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(x, eta1, color='crimson', label=f'Jet 1 vs reste (global={g1:.3f})')
+    ax.plot(x, eta0, color='seagreen', label=f'Gaz porteur vs injectes (global={g0:.3f})')
+
+    if int(d['n_slots']) == 2:
+        eta2 = mixing_efficiency_profile(Y2)
+        g2 = mixing_efficiency_global(Y2)
+        ax.plot(x, eta2, color='steelblue', label=f'Jet 2 vs reste (global={g2:.3f})')
+        for i in range(2):
+            ax.axvline(d[f'slot{i}_xmin']*1e3, color='cyan', ls=':', alpha=0.6)
+
+    ax.set_xlabel('x [mm]')
+    ax.set_ylabel(r'Efficacite de melange $\eta$ (Danckwerts)')
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_title('Progression du melange le long de x (0=segregue, 1=parfaitement melange)')
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+    out = case_filename(args.jets, args.spacing[0] if args.spacing else None, args.tag).replace('.npz', '_mixing.png')
+    fig.savefig(out, dpi=150)
+    print(f"Figure sauvegardee : {out}")
+    print(f"Efficacite globale -- Jet1 vs reste: {g1:.4f}  |  Gaz porteur vs injectes: {g0:.4f}"
+          + (f"  |  Jet2 vs reste: {g2:.4f}" if int(d['n_slots']) == 2 else ""))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    p_run = sub.add_parser("run")
+    p_run.add_argument("--jets", type=int, choices=[1, 2], default=1)
+    p_run.add_argument("--spacing", type=float, nargs="*", default=None)
+    p_run.add_argument("--p0", type=float, nargs="+", default=[6.0e5])
+    p_run.add_argument("--t0", type=float, default=300.0)
+    p_run.add_argument("--minf", type=float, default=2.5)
+    p_run.add_argument("--slot-width-mm", type=float, nargs="+", default=[0.5])
+    p_run.add_argument("--turb", choices=['laminar', 'smagorinsky'], default='smagorinsky')
+    p_run.add_argument("--gas1", choices=list(GAS_PRESETS.keys()), default="air",
+                        help="Gaz injecte par l'orifice 1")
+    p_run.add_argument("--gas2", choices=list(GAS_PRESETS.keys()), default="air",
+                        help="Gaz injecte par l'orifice 2")
+    p_run.add_argument("--inviscid", action="store_true")
+    p_run.add_argument("--nx", type=int, default=500)
+    p_run.add_argument("--ny", type=int, default=180)
+    p_run.add_argument("--nsteps", type=int, default=2500)
+    p_run.add_argument("--nframes", type=int, default=80)
+    p_run.add_argument("--lx-mm", type=float, default=None, dest="lx_mm")
+    p_run.add_argument("--ly-mm", type=float, default=4.0, dest="ly_mm")
+    p_run.add_argument("--tag", type=str, default="")
+    p_run.set_defaults(func=cmd_run)
+
+    p_viz = sub.add_parser("viz")
+    p_viz.add_argument("--jets", type=int, choices=[1, 2], default=2)
+    p_viz.add_argument("--spacing", type=float, nargs="*", default=None)
+    p_viz.add_argument("--tag", type=str, default="")
+    p_viz.set_defaults(func=cmd_viz)
+    
+    p_anim = sub.add_parser("anim")
+    p_anim.add_argument("--jets", type=int, choices=[1, 2], default=2)
+    p_anim.add_argument("--spacing", type=float, nargs="*", default=None)
+    p_anim.add_argument("--tag", type=str, default="")
+    p_anim.add_argument("--anim-mode", choices=['schlieren', 'tracer'], default='tracer')
+    p_anim.set_defaults(func=cmd_anim)
+
+    p_mix = sub.add_parser("mixing", help="Efficacite de melange (post-traitement, Danckwerts)")
+    p_mix.add_argument("--jets", type=int, choices=[1, 2], default=2)
+    p_mix.add_argument("--spacing", type=float, nargs="*", default=None)
+    p_mix.add_argument("--tag", type=str, default="")
+    p_mix.set_defaults(func=cmd_mixing)
+
+    args = parser.parse_args()
+    args.func(args)
+
+if __name__ == "__main__":
+    main()
 
 
 
